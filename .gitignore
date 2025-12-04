@@ -30,6 +30,7 @@ backup/
 *.plan.md
 *.md
 !README.md
+!GITHUB-SETUP.md
 
 # Firebase
 .firebase/
