@@ -30,13 +30,13 @@ import { DocumentSource, User, UserRole, DocType, Customer, BackupData, Location
 
 // --- STAP 1: CONFIGURATIE ---
 const firebaseConfig = {
-  apiKey: "AIzaSyBy8CcUGLleucoYt73VtupuIHZllXnv1WA",
-  authDomain: "richting-sales.firebaseapp.com",
-  projectId: "richting-sales",
-  storageBucket: "richting-sales.firebasestorage.app",
-  messagingSenderId: "1048315100697",
-  appId: "1:1048315100697:web:a053dc84c014107a827488",
-  measurementId: "G-RYLL8X9JY0"
+  apiKey: "AIzaSyDZh5R0sSQ-T3mnk9XS8WA0GV0t_xjD0pY",
+  authDomain: "richting-sales-d764a.firebaseapp.com",
+  projectId: "richting-sales-d764a",
+  storageBucket: "richting-sales-d764a.firebasestorage.app",
+  messagingSenderId: "228500270341",
+  appId: "1:228500270341:web:1e2bbafbc609136a581b6c",
+  measurementId: "G-6833KTWQ8K"
 };
 
 // --- STAP 2: INITIALISATIE ---
