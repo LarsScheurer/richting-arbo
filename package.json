@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "backup": "./backup-to-github.sh"
+    "backup": "./backup-to-github.sh",
+    "auto-backup": "./auto-backup.sh"
   },
   "dependencies": {
     "@google/generative-ai": "^0.24.1",
