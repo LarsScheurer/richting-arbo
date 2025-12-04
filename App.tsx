@@ -593,96 +593,106 @@ const CustomerDetailView = ({
            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
              {/* Processen */}
              <div className="bg-white border border-gray-200 rounded-lg p-4">
-               <h4 className="font-bold text-slate-900 mb-3">Processen ({organisatieProfiel.processen?.length || 0})</h4>
-               <div className="space-y-2 max-h-96 overflow-y-auto">
-                 {organisatieProfiel.processen?.map(proces => {
-                   const risicos = proces.risicos || [];
-                   // Bereken prioriteit voor dit proces
-                   const risicosMetBerekening = risicos.map(item => {
-                     const risico = item.risico || organisatieProfiel.risicos.find(r => r.id === item.risicoId);
-                     if (!risico) return null;
-                     const blootstelling = item.blootstelling || 3;
-                     const kans = convertKansToFineKinney(risico.kans);
-                     const effect = convertEffectToFineKinney(risico.effect);
-                     const risicogetal = blootstelling * kans * effect;
-                     return { risico, blootstelling, kans, effect, risicogetal };
-                   }).filter(Boolean);
-                   const gemiddeldePrioriteit = risicosMetBerekening.length > 0 
-                     ? risicosMetBerekening.reduce((sum, r) => sum + (r?.risicogetal || 0), 0) / risicosMetBerekening.length
-                     : 0;
-                   const prioriteitNiveau = gemiddeldePrioriteit >= 400 ? 1 : gemiddeldePrioriteit >= 200 ? 2 : gemiddeldePrioriteit >= 100 ? 3 : gemiddeldePrioriteit >= 50 ? 4 : 5;
-                   const prioriteitLabels = ['Zeer hoog', 'Hoog', 'Middel', 'Laag', 'Zeer laag'];
-                   const prioriteitColors = ['bg-red-100 text-red-700', 'bg-orange-100 text-orange-700', 'bg-yellow-100 text-yellow-700', 'bg-blue-100 text-blue-700', 'bg-green-100 text-green-700'];
-                   
-                   return (
-                     <div 
-                       key={proces.id} 
-                       onClick={() => setSelectedProces(proces)}
-                       className="p-3 border border-gray-200 rounded cursor-pointer hover:border-richting-orange transition-colors"
-                     >
-                       <div className="flex justify-between items-start">
-                         <div className="flex-1">
-                           <h5 className="font-bold text-sm text-slate-900">{proces.naam}</h5>
-                           <p className="text-xs text-gray-500 mt-1 line-clamp-2">{proces.beschrijving}</p>
-                           <p className="text-xs text-gray-400 mt-1">{risicos.length} risico's</p>
-                         </div>
-                         <span className={`px-2 py-1 rounded text-xs font-bold ${prioriteitColors[prioriteitNiveau - 1]}`}>
-                           {prioriteitNiveau}. {prioriteitLabels[prioriteitNiveau - 1]}
-                         </span>
-                       </div>
-                     </div>
-                   );
-                 })}
+              <h4 className="font-bold text-slate-900 mb-3">Processen ({organisatieProfiel.processen?.length || 0})</h4>
+              <div className="space-y-2 max-h-96 overflow-y-auto">
+                {organisatieProfiel.processen
+                  ?.map(proces => {
+                    const risicos = proces.risicos || [];
+                    // Bereken prioriteit voor dit proces
+                    const risicosMetBerekening = risicos.map(item => {
+                      const risico = item.risico || organisatieProfiel.risicos.find(r => r.id === item.risicoId);
+                      if (!risico) return null;
+                      const blootstelling = item.blootstelling || 3;
+                      const kans = convertKansToFineKinney(risico.kans);
+                      const effect = convertEffectToFineKinney(risico.effect);
+                      const risicogetal = blootstelling * kans * effect;
+                      return { risico, blootstelling, kans, effect, risicogetal };
+                    }).filter(Boolean);
+                    const gemiddeldePrioriteit = risicosMetBerekening.length > 0 
+                      ? risicosMetBerekening.reduce((sum, r) => sum + (r?.risicogetal || 0), 0) / risicosMetBerekening.length
+                      : 0;
+                    const prioriteitNiveau = gemiddeldePrioriteit >= 400 ? 1 : gemiddeldePrioriteit >= 200 ? 2 : gemiddeldePrioriteit >= 100 ? 3 : gemiddeldePrioriteit >= 50 ? 4 : 5;
+                    return { proces, prioriteitNiveau, risicos };
+                  })
+                  .sort((a, b) => (a?.prioriteitNiveau || 5) - (b?.prioriteitNiveau || 5))
+                  .map(({ proces, prioriteitNiveau, risicos }) => {
+                    const prioriteitLabels = ['Zeer hoog', 'Hoog', 'Middel', 'Laag', 'Zeer laag'];
+                    const prioriteitColors = ['bg-red-100 text-red-700', 'bg-orange-100 text-orange-700', 'bg-yellow-100 text-yellow-700', 'bg-blue-100 text-blue-700', 'bg-green-100 text-green-700'];
+                    
+                    return (
+                      <div 
+                        key={proces.id} 
+                        onClick={() => setSelectedProces(proces)}
+                        className="p-3 border border-gray-200 rounded cursor-pointer hover:border-richting-orange transition-colors"
+                      >
+                        <div className="flex justify-between items-start">
+                          <div className="flex-1">
+                            <h5 className="font-bold text-sm text-slate-900">{proces.naam}</h5>
+                            <p className="text-xs text-gray-500 mt-1 line-clamp-2">{proces.beschrijving}</p>
+                            <p className="text-xs text-gray-400 mt-1">{risicos.length} risico's</p>
+                          </div>
+                          <span className={`px-2 py-1 rounded text-xs font-bold ${prioriteitColors[prioriteitNiveau - 1]}`}>
+                            {prioriteitNiveau}. {prioriteitLabels[prioriteitNiveau - 1]}
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })}
                </div>
              </div>
 
              {/* Functies */}
              <div className="bg-white border border-gray-200 rounded-lg p-4">
-               <h4 className="font-bold text-slate-900 mb-3">Functies ({organisatieProfiel.functies?.length || 0})</h4>
-               <div className="space-y-2 max-h-96 overflow-y-auto">
-                 {organisatieProfiel.functies?.map(functie => {
-                   const risicos = functie.risicos || [];
-                   // Bereken prioriteit voor deze functie
-                   const risicosMetBerekening = risicos.map(item => {
-                     const risico = item.risico || organisatieProfiel.risicos.find(r => r.id === item.risicoId);
-                     if (!risico) return null;
-                     const blootstelling = item.blootstelling || 3;
-                     const kans = convertKansToFineKinney(risico.kans);
-                     const effect = convertEffectToFineKinney(risico.effect);
-                     const risicogetal = blootstelling * kans * effect;
-                     return { risico, blootstelling, kans, effect, risicogetal };
-                   }).filter(Boolean);
-                   const gemiddeldePrioriteit = risicosMetBerekening.length > 0 
-                     ? risicosMetBerekening.reduce((sum, r) => sum + (r?.risicogetal || 0), 0) / risicosMetBerekening.length
-                     : 0;
-                   const prioriteitNiveau = gemiddeldePrioriteit >= 400 ? 1 : gemiddeldePrioriteit >= 200 ? 2 : gemiddeldePrioriteit >= 100 ? 3 : gemiddeldePrioriteit >= 50 ? 4 : 5;
-                   const prioriteitLabels = ['Zeer hoog', 'Hoog', 'Middel', 'Laag', 'Zeer laag'];
-                   const prioriteitColors = ['bg-red-100 text-red-700', 'bg-orange-100 text-orange-700', 'bg-yellow-100 text-yellow-700', 'bg-blue-100 text-blue-700', 'bg-green-100 text-green-700'];
-                   
-                   return (
-                     <div 
-                       key={functie.id} 
-                       onClick={() => setSelectedFunctie(functie)}
-                       className="p-3 border border-gray-200 rounded cursor-pointer hover:border-richting-orange transition-colors"
-                     >
-                       <div className="flex justify-between items-start">
-                         <div className="flex-1">
-                           <h5 className="font-bold text-sm text-slate-900">{functie.naam}</h5>
-                           <p className="text-xs text-gray-500 mt-1 line-clamp-2">{functie.beschrijving}</p>
-                           {functie.fysiek !== undefined && functie.psychisch !== undefined && (
-                             <p className="text-xs text-gray-400 mt-1">
-                               Fysiek: {functie.fysiek}/5, Psychisch: {functie.psychisch}/5
-                             </p>
-                           )}
-                           <p className="text-xs text-gray-400 mt-1">{risicos.length} risico's</p>
-                         </div>
-                         <span className={`px-2 py-1 rounded text-xs font-bold ${prioriteitColors[prioriteitNiveau - 1]}`}>
-                           {prioriteitNiveau}. {prioriteitLabels[prioriteitNiveau - 1]}
-                         </span>
-                       </div>
-                     </div>
-                   );
-                 })}
+              <h4 className="font-bold text-slate-900 mb-3">Functies ({organisatieProfiel.functies?.length || 0})</h4>
+              <div className="space-y-2 max-h-96 overflow-y-auto">
+                {organisatieProfiel.functies
+                  ?.map(functie => {
+                    const risicos = functie.risicos || [];
+                    // Bereken prioriteit voor deze functie
+                    const risicosMetBerekening = risicos.map(item => {
+                      const risico = item.risico || organisatieProfiel.risicos.find(r => r.id === item.risicoId);
+                      if (!risico) return null;
+                      const blootstelling = item.blootstelling || 3;
+                      const kans = convertKansToFineKinney(risico.kans);
+                      const effect = convertEffectToFineKinney(risico.effect);
+                      const risicogetal = blootstelling * kans * effect;
+                      return { risico, blootstelling, kans, effect, risicogetal };
+                    }).filter(Boolean);
+                    const gemiddeldePrioriteit = risicosMetBerekening.length > 0 
+                      ? risicosMetBerekening.reduce((sum, r) => sum + (r?.risicogetal || 0), 0) / risicosMetBerekening.length
+                      : 0;
+                    const prioriteitNiveau = gemiddeldePrioriteit >= 400 ? 1 : gemiddeldePrioriteit >= 200 ? 2 : gemiddeldePrioriteit >= 100 ? 3 : gemiddeldePrioriteit >= 50 ? 4 : 5;
+                    return { functie, prioriteitNiveau, risicos };
+                  })
+                  .sort((a, b) => (a?.prioriteitNiveau || 5) - (b?.prioriteitNiveau || 5))
+                  .map(({ functie, prioriteitNiveau, risicos }) => {
+                    const prioriteitLabels = ['Zeer hoog', 'Hoog', 'Middel', 'Laag', 'Zeer laag'];
+                    const prioriteitColors = ['bg-red-100 text-red-700', 'bg-orange-100 text-orange-700', 'bg-yellow-100 text-yellow-700', 'bg-blue-100 text-blue-700', 'bg-green-100 text-green-700'];
+                    
+                    return (
+                      <div 
+                        key={functie.id} 
+                        onClick={() => setSelectedFunctie(functie)}
+                        className="p-3 border border-gray-200 rounded cursor-pointer hover:border-richting-orange transition-colors"
+                      >
+                        <div className="flex justify-between items-start">
+                          <div className="flex-1">
+                            <h5 className="font-bold text-sm text-slate-900">{functie.naam}</h5>
+                            <p className="text-xs text-gray-500 mt-1 line-clamp-2">{functie.beschrijving}</p>
+                            {functie.fysiek !== undefined && functie.psychisch !== undefined && (
+                              <p className="text-xs text-gray-400 mt-1">
+                                Fysiek: {functie.fysiek}/5, Psychisch: {functie.psychisch}/5
+                              </p>
+                            )}
+                            <p className="text-xs text-gray-400 mt-1">{risicos.length} risico's</p>
+                          </div>
+                          <span className={`px-2 py-1 rounded text-xs font-bold ${prioriteitColors[prioriteitNiveau - 1]}`}>
+                            {prioriteitNiveau}. {prioriteitLabels[prioriteitNiveau - 1]}
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })}
                </div>
              </div>
            </div>
