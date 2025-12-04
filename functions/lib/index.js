@@ -1,0 +1,2026 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.getCustomerFolders = exports.searchDriveFolder = exports.checkRIERapportage = exports.searchCompanyWebsite = exports.exportRapport = exports.analyseCultuurTest = exports.analyseBranche = exports.askQuestion = exports.analyzeDriveFile = exports.listModels = exports.analyzeDocument = void 0;
+const https_1 = require("firebase-functions/v2/https");
+const v2_1 = require("firebase-functions/v2");
+const admin = require("firebase-admin");
+const generative_ai_1 = require("@google/generative-ai");
+const googleapis_1 = require("googleapis");
+// import * as cors from "cors";
+// Initialize Firebase Admin with explicit database configuration
+const app = admin.initializeApp();
+// Helper to get the named database (richting01) - same as frontend
+// In Admin SDK, we need to access the named database differently
+function getFirestoreDb() {
+    try {
+        // Method 1: Try using the database() method on the Firestore instance (Admin SDK v12+)
+        const firestoreInstance = admin.firestore();
+        if (firestoreInstance.database && typeof firestoreInstance.database === 'function') {
+            const namedDb = firestoreInstance.database('richting01');
+            console.log('✅ Using named database: richting01 (method 1)');
+            return namedDb;
+        }
+        // Method 2: Try using app.firestore() with database name
+        if (app.firestore && typeof app.firestore === 'function') {
+            try {
+                const namedDb = app.firestore('richting01');
+                console.log('✅ Using named database: richting01 (method 2)');
+                return namedDb;
+            }
+            catch (e) {
+                console.log('Method 2 failed:', e);
+            }
+        }
+        // Method 3: Try direct Firestore constructor with database name
+        try {
+            // In some versions, you can pass the database name directly
+            const Firestore = require('@google-cloud/firestore').Firestore;
+            const namedDb = new Firestore({ databaseId: 'richting01' });
+            console.log('✅ Using named database: richting01 (method 3)');
+            return namedDb;
+        }
+        catch (e) {
+            console.log('Method 3 failed:', e);
+        }
+        // Fallback: Use default database but log warning
+        console.warn('⚠️ Named database "richting01" not available, using default database. This may cause issues if prompts are stored in richting01.');
+        console.warn('⚠️ Make sure the prompts collection exists in the default database, or check Firebase Admin SDK version.');
+        return admin.firestore();
+    }
+    catch (error) {
+        console.error('❌ Error accessing named database:', error);
+        // Still return default database as fallback
+        return admin.firestore();
+    }
+}
+// Set global options for v2 functions
+(0, v2_1.setGlobalOptions)({ region: "europe-west4" });
+// const corsHandler = cors({ origin: true });
+// --- CONFIG ---
+// For v2, we use process.env directly or parametrized config, but for simplicity we stick to env vars
+// configured via firebase functions:config:set (which are available in v1) OR define them in .env file for functions
+// V2 prefers using defineString/defineSecret, but let's keep it simple first.
+const API_KEY = process.env.GEMINI_API_KEY || process.env.gemini_key;
+const genAI = API_KEY ? new generative_ai_1.GoogleGenerativeAI(API_KEY) : null;
+const KNOWLEDGE_STRUCTURE_DESC = `
+HOOFDCATEGORIE: Strategie & Visie (ID: strategy)
+SUBCATEGORIEËN: Jaarplannen (ID: yearplan), Directie (ID: management), Marktontwikkeling (ID: market)
+
+HOOFDCATEGORIE: HR & Organisatie (ID: hr)
+SUBCATEGORIEËN: Handboek (ID: handbook), Verlof & Verzuim (ID: leave), Onboarding (ID: onboarding), Thuiswerken (ID: wfh)
+
+HOOFDCATEGORIE: Marketing & Sales (ID: marketing)
+SUBCATEGORIEËN: Branding (ID: branding), Campagnes (ID: campaigns), Productsheets (ID: products), Sales Scripts (ID: scripts)
+
+HOOFDCATEGORIE: IT & Development (ID: tech)
+SUBCATEGORIEËN: Security (ID: security), Handleidingen (ID: manuals), Tech Stack (ID: stack), Protocollen (ID: protocols)
+
+HOOFDCATEGORIE: Projecten (ID: projects)
+SUBCATEGORIEËN: Lopend (ID: active), Afgerond (ID: finished), Case Studies (ID: cases)
+`;
+exports.analyzeDocument = (0, https_1.onRequest)({ cors: true }, async (req, res) => {
+    if (!genAI) {
+        res.status(500).json({ error: "Server misconfiguration: API Key missing." });
+        return;
+    }
+    const { text } = req.body;
+    if (!text) {
+        res.status(400).json({ error: "No text provided" });
+        return;
+    }
+    try {
+        const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+        const prompt = `
+        Je bent een content analist voor Richting.nl. Analyseer de volgende tekst.
+        
+        TAAK:
+        1. Genereer een pakkende, zakelijke titel (max 10 woorden) die de kern van het document samenvat.
+        2. Schrijf een uitgebreide, zakelijke samenvatting (100-150 woorden) met de belangrijkste punten, conclusies en acties uit het document.
+        3. Categoriseer het document door een Main Category ID en een Sub Category ID te kiezen uit de lijst hieronder.
+        4. Genereer 3 relevante tags.
+        
+        CATEGORIE STRUCTUUR:
+        ${KNOWLEDGE_STRUCTURE_DESC}
+        
+        TEKST:
+        ${text.substring(0, 10000)}
+
+        Geef het antwoord in puur JSON formaat (zonder markdown opmaak):
+        {
+          "title": "Pakkende titel (max 10 woorden)",
+          "summary": "Uitgebreide samenvatting van 100-150 woorden met belangrijkste punten, conclusies en acties.",
+          "mainCategoryId": "...",
+          "subCategoryId": "...",
+          "tags": ["...", "...", "..."]
+        }
+      `;
+        const result = await model.generateContent(prompt);
+        const response = await result.response;
+        let jsonStr = response.text();
+        jsonStr = jsonStr.replace(/```json/g, '').replace(/```/g, '').trim();
+        const json = JSON.parse(jsonStr);
+        res.json(json);
+    }
+    catch (error) {
+        console.error("Analysis Error:", error);
+        res.status(500).json({ error: error.message });
+    }
+});
+// Test endpoint to list available models
+exports.listModels = (0, https_1.onRequest)({ cors: true }, async (req, res) => {
+    if (!genAI) {
+        res.status(500).json({ error: "Server misconfiguration: API Key missing." });
+        return;
+    }
+    try {
+        // Try to get available models
+        const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${process.env.GEMINI_API_KEY}`);
+        const data = await response.json();
+        res.json({ models: data.models || [], fullResponse: data });
+    }
+    catch (error) {
+        console.error("ListModels Error:", error);
+        res.status(500).json({ error: error.message });
+    }
+});
+// Extract file ID from Google Drive URL
+function extractFileId(url) {
+    const patterns = [
+        /\/d\/([a-zA-Z0-9_-]+)/,
+        /id=([a-zA-Z0-9_-]+)/,
+        /\/file\/d\/([a-zA-Z0-9_-]+)/
+    ];
+    for (const pattern of patterns) {
+        const match = url.match(pattern);
+        if (match)
+            return match[1];
+    }
+    return null;
+}
+// Fetch content from Google Drive file
+async function fetchDriveFileContent(fileId, mimeType, accessToken) {
+    // Use API key for public files, or access token for private files
+    const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
+    const drive = googleapis_1.google.drive({
+        version: 'v3',
+        auth: accessToken || apiKey || undefined
+    });
+    // Get file metadata
+    const fileMetadata = await drive.files.get({
+        fileId,
+        fields: 'name, mimeType, webViewLink'
+    });
+    const title = fileMetadata.data.name || 'Untitled';
+    const webViewLink = fileMetadata.data.webViewLink || `https://drive.google.com/file/d/${fileId}/view`;
+    const fileMimeType = fileMetadata.data.mimeType || mimeType;
+    let content = '';
+    // Handle Google Docs (export as plain text)
+    if (fileMimeType === 'application/vnd.google-apps.document') {
+        const exported = await drive.files.export({
+            fileId,
+            mimeType: 'text/plain'
+        });
+        content = exported.data;
+    }
+    // Handle PDFs (download and extract text - simplified, might need PDF parsing library)
+    else if (fileMimeType === 'application/pdf') {
+        // For now, we'll note that it's a PDF and the user can view it
+        // Full PDF text extraction would require a PDF parsing library like pdf-parse
+        // TODO: Implement PDF text extraction
+        content = `[PDF Document: ${title}. Download en bekijk het origineel voor volledige inhoud.]`;
+    }
+    // Handle other text files
+    else if (fileMimeType.startsWith('text/')) {
+        const textResponse = await drive.files.get({
+            fileId,
+            alt: 'media'
+        });
+        content = textResponse.data;
+    }
+    else {
+        content = `[Bestand type: ${fileMimeType}. Bekijk het origineel voor volledige inhoud.]`;
+    }
+    return { content, title, webViewLink };
+}
+// New endpoint to analyze Google Drive files
+exports.analyzeDriveFile = (0, https_1.onRequest)({ cors: true }, async (req, res) => {
+    if (!genAI) {
+        res.status(500).json({ error: "Server misconfiguration: API Key missing." });
+        return;
+    }
+    const { driveUrl, fileId, accessToken } = req.body;
+    if (!driveUrl && !fileId) {
+        res.status(400).json({ error: "driveUrl or fileId required" });
+        return;
+    }
+    try {
+        const id = fileId || extractFileId(driveUrl);
+        if (!id) {
+            res.status(400).json({ error: "Could not extract file ID from URL" });
+            return;
+        }
+        // Fetch file content
+        const { content, title, webViewLink } = await fetchDriveFileContent(id, 'application/vnd.google-apps.document', accessToken);
+        if (!content || content.length === 0) {
+            res.status(400).json({ error: "Could not extract content from file" });
+            return;
+        }
+        // Analyze with Gemini
+        const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+        const prompt = `
+        Je bent een content analist voor Richting.nl. Analyseer de volgende tekst.
+        
+        TAAK:
+        1. Genereer een pakkende, zakelijke titel (max 10 woorden) die de kern van het document samenvat.
+        2. Schrijf een uitgebreide, zakelijke samenvatting (100-150 woorden) met de belangrijkste punten, conclusies en acties uit het document.
+        3. Categoriseer het document door een Main Category ID en een Sub Category ID te kiezen uit de lijst hieronder.
+        4. Genereer 3 relevante tags.
+        
+        CATEGORIE STRUCTUUR:
+        ${KNOWLEDGE_STRUCTURE_DESC}
+        
+        TEKST:
+        ${content.substring(0, 10000)}
+        
+        Geef het antwoord in puur JSON formaat (zonder markdown opmaak):
+        {
+          "title": "Pakkende titel (max 10 woorden)",
+          "summary": "Uitgebreide samenvatting van 100-150 woorden met belangrijkste punten, conclusies en acties.",
+          "mainCategoryId": "...",
+          "subCategoryId": "...",
+          "tags": ["...", "...", "..."]
+        }
+      `;
+        const result = await model.generateContent(prompt);
+        const response = await result.response;
+        let jsonStr = response.text();
+        jsonStr = jsonStr.replace(/```json/g, '').replace(/```/g, '').trim();
+        const json = JSON.parse(jsonStr);
+        // Return analysis plus file metadata
+        res.json(Object.assign(Object.assign({}, json), { title, originalUrl: webViewLink, fileId: id, content: content.substring(0, 5000) // Return first 5000 chars for preview
+         }));
+    }
+    catch (error) {
+        console.error("Drive Analysis Error:", error);
+        res.status(500).json({ error: error.message });
+    }
+});
+exports.askQuestion = (0, https_1.onRequest)({ cors: true }, async (req, res) => {
+    if (!genAI) {
+        res.status(500).json({ error: "Server misconfiguration: API Key missing." });
+        return;
+    }
+    const { question, context } = req.body;
+    try {
+        const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+        const prompt = `
+          Je bent de AI Kennisbank assistent van Richting.nl.
+          Beantwoord de vraag op basis van de bronnen.
+          
+          BRONNEN:
+          ${context}
+          
+          VRAAG:
+          ${question}
+        `;
+        const result = await model.generateContent(prompt);
+        const response = await result.response;
+        res.json({ answer: response.text() });
+    }
+    catch (error) {
+        console.error("Question Error:", error);
+        res.status(500).json({ error: error.message });
+    }
+});
+// Default Branche Analyse Prompt (fallback als Firestore geen prompt heeft)
+const DEFAULT_BRANCHE_ANALYSE_PROMPT = `
+Je bent Gemini, geconfigureerd als een deskundige adviseur en brancheanalist voor Richting, een toonaangevende, gecertificeerde arbodienst in Nederland. Je primaire taak is het uitvoeren van een diepgaande organisatie- en brancheanalyse op basis van een door de gebruiker opgegeven organisatienaam en website.
+
+Je schrijft altijd vanuit de identiteit en expertise van Richting. De toon is persoonlijk, professioneel, proactief en adviserend, gericht aan de directie van de te analyseren organisatie. Het doel is niet alleen te informeren, maar vooral om concrete, op maat gemaakte adviezen en een stappenplan voor samenwerking aan te bieden.
+
+OPDRACHT:
+
+Zodra je de organisatienaam en website hebt, voer je een "deep search" uit en genereer je een volledig analyserapport.
+
+Dit rapport moet strikt de structuur en kwaliteitsnormen volgen zoals vastgelegd in het "Handboek: Kwaliteitsstandaard voor Diepgaande Brancheanalyse". Werk alle onderstaande hoofdstukken volledig en gedetailleerd uit.
+
+DE GOUDEN STANDAARD: RAPPORTSTRUCTUUR
+
+Aanhef: "Geachte directie van [Naam Organisatie],"
+
+Inleiding: Een korte, persoonlijke introductie vanuit Richting, waarin je het doel van dit rapport uitlegt: het bieden van inzicht in de branche-specifieke risico's en het voorstellen van een proactieve aanpak voor een gezonde en veilige werkomgeving. Vermeld bovenaan het rapport de berekende totaalscore en gemiddelde risicoscore van de branche.
+
+Hoofdstuk 1: Introductie en Branche-identificatie
+- Geef een algemene beschrijving van de sector en de belangrijkste activiteiten.
+- Analyseer de actualiteiten in de branche op het gebied van mens en werk (arbeidsmarkt, trends, vacatures).
+- Identificeer de belangrijkste CAO-thema's die relevant zijn voor verzuim en arbeidsomstandigheden. Benoem de betrokken werkgevers- en werknemersorganisaties.
+
+Hoofdstuk 2: SBI-codes en Bedrijfsinformatie
+- Toon in een tabel de relevante SBI-codes met omschrijving.
+- Analyseer de personele omvang en vestigingslocaties van de organisatie in Nederland.
+- Identificeer alle vestigingslocaties met volledige adresgegevens (straat, huisnummer, postcode, stad).
+- Voor elke locatie: geef de naam (bijv. "Hoofdkantoor", "Vestiging Amsterdam"), volledig adres, stad, en indien beschikbaar het aantal medewerkers op die locatie.
+- Presenteer in een tabel de personele aantallen per regio (Noord, Midden Oost, Midden Zuid, Zuid Nederland). Geef aan als data onbekend is.
+- Vermeld in de tabel de dichtstbijzijnde Richting-locatie.
+
+Hoofdstuk 3: Arbocatalogus en Branche-RI&E
+- Geef een overzicht van de door de branche erkende arbo-instrumenten (Arbocatalogus, Branche-RI&E), inclusief hun status en directe hyperlinks.
+
+Hoofdstuk 4: Risicocategorieën en Kwantificering
+- Presenteer een tabel met de belangrijkste risico's, onderverdeeld in 'Psychische risico's', 'Fysieke risico's', en 'Overige'.
+- Kwantificeer elk risico met een score voor Kans (1-5) en Effect (1-5) en bereken de totaalscore (Kans * Effect).
+- Toon onderaan de tabel de totaaltelling van alle risicoscores.
+- Licht in een korte alinea de berekende totaalscore en gemiddelde score toe, zoals vermeld in de inleiding.
+
+Hoofdstuk 5: Primaire Processen in de Branche
+- Beschrijf stapsgewijs de kernprocessen op de werkvloer die typerend zijn voor deze branche.
+
+Hoofdstuk 6: Werkzaamheden en Functies
+- Geef een overzicht van de meest voorkomende functies, inclusief een omschrijving en voorbeelden van taken.
+
+Hoofdstuk 7: Verzuim in de Branche
+- Analyseer het verzuim in de branche, benoem de belangrijkste oorzaken en vergelijk dit met het landelijk gemiddelde.
+- Presenteer een matrix van verzuimrisico's per functie. Gebruik de functies in de rijen en de risico's in de kolommen.
+
+Hoofdstuk 8: Beroepsziekten in de Branche
+- Analyseer de meest voorkomende beroepsziekten en koppel deze direct aan de geïdentificeerde risico's uit hoofdstuk 4.
+
+Hoofdstuk 9: Gevaarlijke Stoffen en Risico's
+- Indien van toepassing, beschrijf de gevaarlijke stoffen die in de sector worden gebruikt.
+- Presenteer een matrix die de risico's bij de hantering van deze stoffen weergeeft.
+
+Hoofdstuk 10: Risicomatrices
+- Matrix 1: Risico's per Primair Proces.
+- Matrix 2: Risico's per Functie.
+
+Hoofdstuk 11: Vooruitblik en Speerpunten
+- Analyseer het verwachte effect van CAO-thema's op o.a. verzuim, verloop en aantrekkingskracht op de arbeidsmarkt.
+- Formuleer concrete speerpunten voor de ondernemer om verzuim positief te beïnvloeden en te prioriteren.
+- Benoem de gezamenlijke thema's die de ondernemer samen met Richting kan oppakken. Koppel elk speerpunt direct aan een specifieke dienst van Richting met een hyperlink.
+
+Hoofdstuk 12: Stappenplan voor een Preventieve Samenwerking
+- Integreer de visuele weergave van het "Stappenplan Samenwerken aan preventie".
+- Presenteer een concreet en op maat gemaakt stappenplan voor de organisatie, gebaseerd op de analyse. Begin altijd met Implementatie en Verzuimbegeleiding.
+- Doe voorstellen voor specifieke diensten van Richting (RI&E, PMO, Werkplekonderzoek, Het Richtinggevende Gesprek, etc.) met directe hyperlinks naar de relevante webpagina's.
+- Indien er thema's zijn waarvoor geen standaarddienst bestaat, stel maatwerk voor en benadruk dat Richting alle expertise in huis heeft.
+
+Hoofdstuk 13: Bronvermeldingen
+- Geef een volledige lijst van geraadpleegde bronnen, opgemaakt in APA-stijl, met directe en werkende hyperlinks.
+
+CRUCIALE KWALITEITS- EN FORMATVEREISTEN:
+- Visuele Symbolen: Gebruik in alle matrices visuele symbolen (bijv. ● voor 'hoog', ◐ voor 'gemiddeld', ○ voor 'laag') in plaats van tekst om de data visueel en direct interpreteerbaar te maken.
+- Geen Google Links: Verifieer dat absoluut geen enkele hyperlink in het rapport begint met https://www.google.com/search?q=. Alle links moeten directe URL's zijn.
+- Stijl: Het gehele rapport is geschreven in de 'u'-vorm, persoonlijk gericht aan de directie. De stijl is die van een deskundige partner die meedenkt en concrete oplossingen biedt.
+- Afsluiting: Sluit elk rapport af met de datum van generatie en een copyright-vermelding: © [Jaar] Richting. Alle rechten voorbehouden.
+
+BELANGRIJK: Geef het antwoord ALLEEN in puur, geldig JSON formaat. Geen markdown, geen code blocks, geen extra tekst. Alleen de JSON object. Zorg dat alle string waarden correct ge-escaped zijn (newlines als \\n, quotes als \\"). De JSON moet direct parseerbaar zijn zonder enige bewerking. Structuur:
+{
+  "volledigRapport": "Het volledige markdown rapport zoals hierboven beschreven",
+  "totaalScore": 0,
+  "gemiddeldeRisicoScore": 0,
+  "risicos": [
+    {
+      "id": "risico_1",
+      "naam": "...",
+      "categorie": "psychisch|fysiek|overige",
+      "kans": 1-5,
+      "effect": 1-5,
+      "totaalScore": kans * effect
+    }
+  ],
+  "processen": [
+    {
+      "id": "proces_1",
+      "naam": "...",
+      "beschrijving": "..."
+    }
+  ],
+  "functies": [
+    {
+      "id": "functie_1",
+      "naam": "...",
+      "beschrijving": "...",
+      "taken": ["...", "..."]
+    }
+  ],
+  "gevaarlijkeStoffen": [
+    {
+      "id": "stof_1",
+      "naam": "...",
+      "categorie": "...",
+      "risicoNiveau": "..."
+    }
+  ],
+  "beroepsziekten": [
+    {
+      "id": "ziekte_1",
+      "naam": "...",
+      "beschrijving": "...",
+      "gekoppeldeRisicos": ["risico_id"]
+    }
+  ],
+  "sbiCodes": [
+    {
+      "code": "...",
+      "omschrijving": "..."
+    }
+  ],
+  "personeleOmvang": [
+    {
+      "regio": "noord|midden_oost|midden_zuid|zuid",
+      "aantal": 0,
+      "richtingLocatie": "..."
+    }
+  ],
+  "locaties": [
+    {
+      "naam": "Naam van de locatie (bijv. Hoofdkantoor, Vestiging Amsterdam)",
+      "adres": "Volledig adres inclusief straat en huisnummer",
+      "stad": "Stad",
+      "aantalMedewerkers": 0,
+      "richtingLocatie": "Naam van de dichtstbijzijnde Richting vestiging (bijv. Richting Amsterdam, Richting Rotterdam)"
+    }
+  ],
+  "verzuimRisicoMatrix": [
+    {
+      "functieId": "functie_id",
+      "risicoId": "risico_id",
+      "niveau": "hoog|gemiddeld|laag"
+    }
+  ],
+  "procesRisicoMatrix": [
+    {
+      "procesId": "proces_id",
+      "risicoId": "risico_id",
+      "niveau": "hoog|gemiddeld|laag"
+    }
+  ],
+  "functieRisicoMatrix": [
+    {
+      "functieId": "functie_id",
+      "risicoId": "risico_id",
+      "niveau": "hoog|gemiddeld|laag"
+    }
+  ],
+  "functieBelasting": [
+    {
+      "functieId": "functie_id",
+      "fysiek": 1-5,
+      "psychisch": 1-5
+    }
+  ],
+  "actiePlan": [
+    {
+      "id": "actie_1",
+      "titel": "Korte titel van de actie",
+      "beschrijving": "Uitgebreide beschrijving van wat er moet gebeuren",
+      "prioriteit": "laag|gemiddeld|hoog|urgent",
+      "richtingDienst": "Naam van de Richting dienst (bijv. RI&E, PMO, Werkplekonderzoek)",
+      "dienstUrl": "URL naar de dienst pagina (als beschikbaar)"
+    }
+  ],
+  "rating": {
+    "werkEnGezondheid": "laag|gemiddeld|hoog|zeer_hoog",
+    "risicoCategorie": ["categorie1", "categorie2"]
+  }
+}
+`;
+// Default prompt voor Publiek Cultuur Profiel (fallback als geen actieve prompt gevonden wordt)
+const DEFAULT_CULTUUR_PROFIEL_PROMPT = `
+Je bent Gemini, geconfigureerd als een deskundige cultuuranalist voor Richting, een toonaangevende, gecertificeerde arbodienst in Nederland. Je primaire taak is het uitvoeren van een diepgaande cultuuranalyse op basis van een door de gebruiker opgegeven organisatienaam en website.
+
+BELANGRIJK: Geef het antwoord ALLEEN in puur, geldig JSON formaat. Geen markdown, geen code blocks, geen extra tekst. Alleen de JSON object. Zorg dat alle string waarden correct ge-escaped zijn (newlines als \\n, quotes als \\"). De JSON moet direct parseerbaar zijn zonder enige bewerking.
+
+Analyseer de organisatiecultuur en genereer een volledig CultuurProfiel met de volgende JSON structuur:
+
+{
+  "volledigRapport": "Volledig markdown rapport met alle bevindingen...",
+  "scores": {
+    "cultuurvolwassenheid": 0-100,
+    "groeidynamiekScore": 0-100,
+    "cultuurfit": 0-100,
+    "cultuursterkte": "laag|gemiddeld|hoog|zeer_hoog",
+    "dynamiekType": "stagnerend|organisch_groeiend|disruptief_veranderend"
+  },
+  "gaps": [
+    {
+      "dimensie": "Naam van dimensie",
+      "huidigeScore": 0-100,
+      "gewensteScore": 0-100,
+      "gap": number,
+      "urgentie": "laag|gemiddeld|hoog|urgent"
+    }
+  ],
+  "dna": {
+    "dominantType": "adhocratie|clan|hiërarchie|markt|hybride",
+    "typeScores": {
+      "adhocratie": 0-100,
+      "clan": 0-100,
+      "hiërarchie": 0-100,
+      "markt": 0-100
+    },
+    "kernwaarden": [
+      {
+        "waarde": "naam van kernwaarde",
+        "score": 0-100,
+        "status": "kracht|zwakte|neutraal|gap",
+        "beschrijving": "korte beschrijving"
+      }
+    ],
+    "dimensies": [
+      {
+        "naam": "naam van dimensie",
+        "score": 0-100,
+        "trend": "stijgend|stabiel|dalend",
+        "impact": "hoog|gemiddeld|laag"
+      }
+    ]
+  },
+  "performanceData": [
+    {
+      "metriek": "naam van metriek",
+      "waarde": number,
+      "trend": "stijgend|stabiel|dalend"
+    }
+  ],
+  "engagementData": [
+    {
+      "dimensie": "naam van dimensie",
+      "score": 0-100,
+      "trend": "stijgend|stabiel|dalend"
+    }
+  ],
+  "barrières": [
+    {
+      "naam": "naam van barrière",
+      "impact": "hoog|gemiddeld|laag",
+      "urgentie": "urgent|hoog|gemiddeld|laag",
+      "beschrijving": "korte beschrijving"
+    }
+  ],
+  "opportuniteiten": [
+    {
+      "naam": "naam van opportuniteit",
+      "potentieel": "hoog|gemiddeld|laag",
+      "prioriteit": "urgent|hoog|gemiddeld|laag",
+      "beschrijving": "korte beschrijving"
+    }
+  ],
+  "themas": [
+    {
+      "naam": "naam van thema",
+      "categorie": "cultuur|leiderschap|processen|technologie",
+      "status": "kracht|zwakte|opportuniteit|risico",
+      "acties": ["actie 1", "actie 2"]
+    }
+  ],
+  "gedragingen": [
+    {
+      "naam": "naam van gedraging",
+      "type": "positief|negatief|neutraal",
+      "frequentie": "vaak|soms|zelden",
+      "impact": "hoog|gemiddeld|laag"
+    }
+  ],
+  "interventies": [
+    {
+      "naam": "naam van interventie",
+      "type": "quick_win|strategisch|transformatie",
+      "prioriteit": "urgent|hoog|gemiddeld|laag",
+      "impact": "hoog|gemiddeld|laag",
+      "beschrijving": "korte beschrijving"
+    }
+  ]
+}
+
+Zorg ervoor dat alle numerieke waarden (scores, percentages) daadwerkelijk worden ingevuld op basis van je analyse, niet op 0 blijven staan.
+`;
+// Helper function to fetch Richting locations from website
+async function getRichtingLocations() {
+    try {
+        // Fetch the website
+        const response = await fetch('https://www.richting.nl/locaties');
+        if (!response.ok) {
+            throw new Error(`Failed to fetch Richting locations: ${response.statusText}`);
+        }
+        const html = await response.text();
+        // Use Gemini to extract locations from HTML
+        if (!genAI) {
+            throw new Error("Gemini API not available");
+        }
+        const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+        const prompt = `
+Je krijgt de HTML van de Richting locaties pagina (www.richting.nl/locaties). 
+
+TAAK: Extraheer ALLE Richting vestigingslocaties die op deze pagina staan.
+
+BELANGRIJK:
+- Zoek naar alle vestigingen, kantoren, of locaties van Richting
+- Elke vestiging heeft meestal een stad/plaatsnaam
+- De naam is meestal "Richting [Stad]" of vergelijkbaar
+- Neem ALLE locaties mee, niet alleen de eerste paar
+
+Geef een JSON array terug met ALLE locaties in dit exacte formaat:
+[
+  {
+    "naam": "Naam van de vestiging (bijv. Richting Amsterdam, Richting Rotterdam, Richting Utrecht)",
+    "stad": "Stad waar de vestiging zich bevindt (bijv. Amsterdam, Rotterdam, Utrecht)",
+    "adres": "Volledig adres (straat, huisnummer, postcode, stad) indien beschikbaar"
+  }
+]
+
+HTML (eerste 50000 karakters):
+${html.substring(0, 50000)}
+
+Geef ALLEEN de JSON array terug, geen markdown, geen code blocks, geen extra tekst. Alleen de array met alle gevonden locaties.
+`;
+        const result = await model.generateContent(prompt);
+        const responseText = result.response.text();
+        // Extract JSON from response
+        let jsonStr = responseText.trim();
+        // Remove markdown code blocks if present
+        jsonStr = jsonStr.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+        // Try to extract JSON array if wrapped in other text
+        const jsonMatch = jsonStr.match(/\[[\s\S]*\]/);
+        if (jsonMatch) {
+            jsonStr = jsonMatch[0];
+        }
+        const locations = JSON.parse(jsonStr);
+        console.log(`✅ Extracted ${locations.length} Richting locations:`, locations.map((l) => `${l.naam} (${l.stad})`).join(', '));
+        return locations;
+    }
+    catch (error) {
+        console.error("Error fetching Richting locations:", error);
+        // Fallback to hardcoded list if fetch fails
+        return [
+            { naam: "Richting Amsterdam", stad: "Amsterdam" },
+            { naam: "Richting Rotterdam", stad: "Rotterdam" },
+            { naam: "Richting Utrecht", stad: "Utrecht" },
+            { naam: "Richting Den Haag", stad: "Den Haag" },
+            { naam: "Richting Eindhoven", stad: "Eindhoven" },
+            { naam: "Richting Groningen", stad: "Groningen" },
+            { naam: "Richting Zwolle", stad: "Zwolle" },
+            { naam: "Richting Arnhem", stad: "Arnhem" },
+            { naam: "Richting Breda", stad: "Breda" },
+            { naam: "Richting Maastricht", stad: "Maastricht" }
+        ];
+    }
+}
+// Helper function to normalize city names (remove accents, postcodes, etc.)
+function normalizeCityName(city) {
+    if (!city)
+        return '';
+    // Remove postcodes (e.g., "1234 AB Amsterdam" -> "Amsterdam")
+    let normalized = city.replace(/\d{4}\s?[A-Z]{2}\s*/gi, '').trim();
+    // Remove common suffixes
+    normalized = normalized.replace(/\s*-\s*(noord|zuid|oost|west|centrum|centrum|noord|zuid)$/gi, '');
+    // Normalize to lowercase
+    normalized = normalized.toLowerCase();
+    // Remove accents and special characters
+    normalized = normalized
+        .replace(/[àáâãäå]/g, 'a')
+        .replace(/[èéêë]/g, 'e')
+        .replace(/[ìíîï]/g, 'i')
+        .replace(/[òóôõö]/g, 'o')
+        .replace(/[ùúûü]/g, 'u')
+        .replace(/[ç]/g, 'c')
+        .replace(/[ñ]/g, 'n');
+    return normalized.trim();
+}
+// Helper function to find nearest Richting location based on city
+function findNearestRichtingLocation(customerCity, richtingLocations) {
+    if (!customerCity || !richtingLocations || richtingLocations.length === 0) {
+        console.log(`⚠️ findNearestRichtingLocation: Missing input - city: ${customerCity}, locations: ${(richtingLocations === null || richtingLocations === void 0 ? void 0 : richtingLocations.length) || 0}`);
+        return undefined;
+    }
+    const normalizedCustomerCity = normalizeCityName(customerCity);
+    console.log(`🔍 Searching for Richting location for city: "${customerCity}" (normalized: "${normalizedCustomerCity}")`);
+    console.log(`📍 Available Richting locations: ${richtingLocations.map(l => `${l.naam} (${l.stad})`).join(', ')}`);
+    // Normalize all Richting location cities
+    const normalizedLocations = richtingLocations.map(loc => (Object.assign(Object.assign({}, loc), { normalizedStad: normalizeCityName(loc.stad) })));
+    // 1. Direct exact match (normalized)
+    const directMatch = normalizedLocations.find(loc => loc.normalizedStad === normalizedCustomerCity);
+    if (directMatch) {
+        console.log(`✅ Direct match found: ${directMatch.naam} for "${customerCity}"`);
+        return directMatch.naam;
+    }
+    // 2. Partial match - customer city contains location city or vice versa
+    const partialMatch = normalizedLocations.find(loc => normalizedCustomerCity.includes(loc.normalizedStad) ||
+        loc.normalizedStad.includes(normalizedCustomerCity));
+    if (partialMatch) {
+        console.log(`✅ Partial match found: ${partialMatch.naam} for "${customerCity}"`);
+        return partialMatch.naam;
+    }
+    // 3. Region-based matching with better city mapping
+    const cityLower = normalizedCustomerCity;
+    // Noord Nederland
+    const noordCities = ['groningen', 'leeuwarden', 'assen', 'emmen', 'drachten', 'heerlen', 'venlo', 'roermond', 'sittard', 'maastricht'];
+    if (noordCities.some(c => cityLower.includes(c)) ||
+        cityLower.includes('friesland') ||
+        cityLower.includes('drenthe') ||
+        cityLower.includes('groningen')) {
+        const noordMatch = normalizedLocations.find(loc => loc.normalizedStad.includes('groningen') ||
+            loc.normalizedStad.includes('zwolle') ||
+            loc.normalizedStad.includes('maastricht'));
+        if (noordMatch) {
+            console.log(`✅ Noord region match found: ${noordMatch.naam} for "${customerCity}"`);
+            return noordMatch.naam;
+        }
+    }
+    // Oost Nederland
+    const oostCities = ['arnhem', 'nijmegen', 'enschede', 'apeldoorn', 'deventer', 'zwolle', 'almelo', 'hengelo', 'doetinchem', 'zutphen'];
+    if (oostCities.some(c => cityLower.includes(c)) ||
+        cityLower.includes('overijssel') ||
+        cityLower.includes('gelderland')) {
+        const oostMatch = normalizedLocations.find(loc => loc.normalizedStad.includes('arnhem') ||
+            loc.normalizedStad.includes('zwolle') ||
+            loc.normalizedStad.includes('utrecht'));
+        if (oostMatch) {
+            console.log(`✅ Oost region match found: ${oostMatch.naam} for "${customerCity}"`);
+            return oostMatch.naam;
+        }
+    }
+    // Zuid Nederland
+    const zuidCities = ['eindhoven', 'tilburg', 'breda', 'den bosch', 's-hertogenbosch', 'helmond', 'oss', 'venray', 'roosendaal', 'bergen op zoom'];
+    if (zuidCities.some(c => cityLower.includes(c)) ||
+        cityLower.includes('limburg') ||
+        cityLower.includes('brabant') ||
+        cityLower.includes('noord-brabant')) {
+        const zuidMatch = normalizedLocations.find(loc => loc.normalizedStad.includes('eindhoven') ||
+            loc.normalizedStad.includes('breda') ||
+            loc.normalizedStad.includes('maastricht'));
+        if (zuidMatch) {
+            console.log(`✅ Zuid region match found: ${zuidMatch.naam} for "${customerCity}"`);
+            return zuidMatch.naam;
+        }
+    }
+    // West Nederland
+    const westCities = ['amsterdam', 'rotterdam', 'den haag', 'haag', 'haarlem', 'utrecht', 'leiden', 'delft', 'gouda', 'alkmaar', 'zaandam'];
+    if (westCities.some(c => cityLower.includes(c)) ||
+        cityLower.includes('holland') ||
+        cityLower.includes('noord-holland') ||
+        cityLower.includes('zuid-holland')) {
+        const westMatch = normalizedLocations.find(loc => loc.normalizedStad.includes('amsterdam') ||
+            loc.normalizedStad.includes('rotterdam') ||
+            loc.normalizedStad.includes('haag') ||
+            loc.normalizedStad.includes('utrecht'));
+        if (westMatch) {
+            console.log(`✅ West region match found: ${westMatch.naam} for "${customerCity}"`);
+            return westMatch.naam;
+        }
+    }
+    // 4. Default fallback - try Utrecht first, then first available
+    const utrechtMatch = normalizedLocations.find(loc => loc.normalizedStad.includes('utrecht'));
+    if (utrechtMatch) {
+        console.log(`⚠️ Using default fallback: ${utrechtMatch.naam} for "${customerCity}"`);
+        return utrechtMatch.naam;
+    }
+    if (richtingLocations.length > 0) {
+        console.log(`⚠️ Using first available location: ${richtingLocations[0].naam} for "${customerCity}"`);
+        return richtingLocations[0].naam;
+    }
+    console.log(`❌ No Richting location found for "${customerCity}"`);
+    return undefined;
+}
+// Endpoint voor branche analyse
+exports.analyseBranche = (0, https_1.onRequest)({
+    cors: true,
+    timeoutSeconds: 540, // 9 minutes (max for 2nd gen)
+    memory: "512MiB" // Increase memory for large responses
+}, async (req, res) => {
+    var _a;
+    // Set CORS headers explicitly
+    res.set('Access-Control-Allow-Origin', '*');
+    res.set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.set('Access-Control-Allow-Headers', 'Content-Type');
+    // Handle preflight
+    if (req.method === 'OPTIONS') {
+        res.status(204).send('');
+        return;
+    }
+    if (!genAI) {
+        res.status(500).json({ error: "Server misconfiguration: API Key missing." });
+        return;
+    }
+    const { organisatieNaam, website } = req.body;
+    if (!organisatieNaam || !website) {
+        res.status(400).json({ error: "organisatieNaam en website zijn verplicht" });
+        return;
+    }
+    try {
+        // Get active prompt from Firestore (use named database 'richting01')
+        let promptTekst = DEFAULT_BRANCHE_ANALYSE_PROMPT;
+        try {
+            const db = getFirestoreDb();
+            const promptsRef = db.collection('prompts');
+            try {
+                const activePromptQuery = await promptsRef
+                    .where('type', '==', 'branche_analyse')
+                    .where('isActief', '==', true)
+                    .orderBy('versie', 'desc')
+                    .limit(1)
+                    .get();
+                if (!activePromptQuery.empty) {
+                    promptTekst = activePromptQuery.docs[0].data().promptTekst;
+                    console.log(`Using active prompt version ${activePromptQuery.docs[0].data().versie}`);
+                }
+                else {
+                    console.log('No active prompt found, using default');
+                }
+            }
+            catch (orderByError) {
+                // If orderBy fails, try without orderBy and sort in memory
+                console.log('⚠️ orderBy failed, trying without orderBy:', orderByError.message);
+                const allActivePrompts = await promptsRef
+                    .where('type', '==', 'branche_analyse')
+                    .where('isActief', '==', true)
+                    .get();
+                if (!allActivePrompts.empty) {
+                    const sorted = allActivePrompts.docs.sort((a, b) => {
+                        const versieA = a.data().versie || 0;
+                        const versieB = b.data().versie || 0;
+                        return versieB - versieA;
+                    });
+                    promptTekst = sorted[0].data().promptTekst;
+                    console.log(`Using active prompt version ${sorted[0].data().versie} (sorted in memory)`);
+                }
+                else {
+                    console.log('No active prompt found, using default');
+                }
+            }
+        }
+        catch (promptError) {
+            console.error("Error fetching prompt from Firestore:", promptError);
+            console.log("Using default prompt");
+        }
+        const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+        const prompt = `${promptTekst}
+
+ORGANISATIE NAAM: ${organisatieNaam}
+WEBSITE: ${website}
+
+Voer nu de analyse uit en geef het resultaat in het gevraagde JSON formaat.`;
+        // Fetch Richting locations once at the start
+        const richtingLocations = await getRichtingLocations();
+        console.log(`📍 Loaded ${richtingLocations.length} Richting locations`);
+        const result = await model.generateContent(prompt);
+        const response = await result.response;
+        let jsonStr = response.text();
+        // Clean up markdown formatting
+        jsonStr = jsonStr.replace(/```json/g, '').replace(/```/g, '').trim();
+        // Try to extract JSON if it's wrapped in other text
+        const jsonMatch = jsonStr.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+            jsonStr = jsonMatch[0];
+        }
+        // Improved JSON repair: handle unescaped characters in string values more robustly
+        // Strategy: iterate character by character and properly escape control characters inside strings
+        let repaired = '';
+        let inString = false;
+        let escapeNext = false;
+        for (let i = 0; i < jsonStr.length; i++) {
+            const char = jsonStr[i];
+            const charCode = jsonStr.charCodeAt(i);
+            if (escapeNext) {
+                // We're processing an escaped character
+                // Check if it's a valid escape sequence
+                const validEscapes = ['n', 'r', 't', 'b', 'f', '\\', '"', '/', 'u'];
+                if (validEscapes.includes(char)) {
+                    repaired += '\\' + char;
+                }
+                else if (char === 'u' && i + 4 < jsonStr.length) {
+                    // Unicode escape sequence \uXXXX
+                    const unicodeSeq = jsonStr.substring(i, i + 5);
+                    if (/^u[0-9A-Fa-f]{4}$/.test(unicodeSeq)) {
+                        repaired += '\\' + unicodeSeq;
+                        i += 4; // Skip the next 4 characters
+                    }
+                    else {
+                        // Invalid unicode escape, escape the backslash
+                        repaired += '\\\\u';
+                    }
+                }
+                else {
+                    // Invalid escape sequence - escape the backslash and keep the character
+                    repaired += '\\\\' + char;
+                }
+                escapeNext = false;
+                continue;
+            }
+            if (char === '\\') {
+                // Start of escape sequence
+                escapeNext = true;
+                continue;
+            }
+            if (char === '"') {
+                inString = !inString;
+                repaired += char;
+                continue;
+            }
+            if (inString) {
+                // Inside a string: escape control characters and special characters
+                if (char === '\n') {
+                    repaired += '\\n';
+                }
+                else if (char === '\r') {
+                    repaired += '\\r';
+                }
+                else if (char === '\t') {
+                    repaired += '\\t';
+                }
+                else if (char === '\b') {
+                    repaired += '\\b';
+                }
+                else if (char === '\f') {
+                    repaired += '\\f';
+                }
+                else if (char === '\\') {
+                    // Unescaped backslash in string - should be escaped
+                    repaired += '\\\\';
+                }
+                else if (char === '"') {
+                    // Unescaped quote in string - should be escaped
+                    repaired += '\\"';
+                }
+                else if (charCode >= 0x00 && charCode <= 0x1F) {
+                    // Control characters (except already handled ones) - remove or escape
+                    // For most control chars, we'll remove them
+                    continue;
+                }
+                else if (charCode === 0x7F) {
+                    // DEL character - remove
+                    continue;
+                }
+                else {
+                    repaired += char;
+                }
+            }
+            else {
+                // Outside a string: keep as is
+                repaired += char;
+            }
+        }
+        // If we ended with an escape sequence, close it properly
+        if (escapeNext) {
+            repaired += '\\\\';
+        }
+        jsonStr = repaired;
+        let json;
+        try {
+            json = JSON.parse(jsonStr);
+        }
+        catch (parseError) {
+            console.error("JSON Parse Error:", parseError.message);
+            const errorPos = (_a = parseError.message.match(/position (\d+)/)) === null || _a === void 0 ? void 0 : _a[1];
+            if (errorPos) {
+                const pos = parseInt(errorPos);
+                console.error("JSON String (around error position):", jsonStr.substring(Math.max(0, pos - 100), pos + 100));
+            }
+            console.error("JSON String (first 500 chars):", jsonStr.substring(0, 500));
+            // Return a structured error response with CORS headers
+            res.status(500).json({
+                error: "Failed to parse Gemini response as JSON",
+                details: parseError.message,
+                rawResponse: jsonStr.substring(0, 2000)
+            });
+            return;
+        }
+        // Add richtingLocatie to each location and to personeleOmvang
+        if (json.locaties && Array.isArray(json.locaties)) {
+            json.locaties = json.locaties.map((locatie) => {
+                if (locatie.stad) {
+                    const nearestRichting = findNearestRichtingLocation(locatie.stad, richtingLocations);
+                    if (nearestRichting) {
+                        locatie.richtingLocatie = nearestRichting;
+                        console.log(`📍 Added richtingLocatie "${nearestRichting}" to location "${locatie.naam}" in ${locatie.stad}`);
+                    }
+                }
+                return locatie;
+            });
+        }
+        // Add richtingLocatie to each regio in personeleOmvang
+        if (json.personeleOmvang && Array.isArray(json.personeleOmvang)) {
+            json.personeleOmvang = json.personeleOmvang.map((regio) => {
+                // Determine a representative city for this region
+                let representativeCity = '';
+                switch (regio.regio) {
+                    case 'noord':
+                        representativeCity = 'Groningen';
+                        break;
+                    case 'midden_oost':
+                        representativeCity = 'Arnhem';
+                        break;
+                    case 'midden_zuid':
+                        representativeCity = 'Utrecht';
+                        break;
+                    case 'zuid':
+                        representativeCity = 'Eindhoven';
+                        break;
+                }
+                if (representativeCity) {
+                    const nearestRichting = findNearestRichtingLocation(representativeCity, richtingLocations);
+                    if (nearestRichting) {
+                        regio.richtingLocatie = nearestRichting;
+                        console.log(`📍 Added richtingLocatie "${nearestRichting}" to regio "${regio.regio}"`);
+                    }
+                }
+                return regio;
+            });
+        }
+        res.json(json);
+    }
+    catch (error) {
+        console.error("Branche Analyse Error:", error);
+        // Always return a response, even on error
+        res.status(500).json({
+            error: error.message || "Unknown error occurred",
+            type: error.name || "Error"
+        });
+    }
+});
+// Publiek Cultuur Profiel Analyse - gebruikt prompt type 'publiek_cultuur_profiel'
+exports.analyseCultuurTest = (0, https_1.onRequest)({
+    cors: true,
+    timeoutSeconds: 540, // 9 minutes (max for 2nd gen)
+    memory: "512MiB" // Increase memory for large responses
+}, async (req, res) => {
+    var _a, _b, _c, _d;
+    // Set CORS headers explicitly
+    res.set('Access-Control-Allow-Origin', '*');
+    res.set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.set('Access-Control-Allow-Headers', 'Content-Type');
+    // Handle preflight
+    if (req.method === 'OPTIONS') {
+        res.status(204).send('');
+        return;
+    }
+    if (!genAI) {
+        res.status(500).json({ error: "Server misconfiguration: API Key missing." });
+        return;
+    }
+    const { organisatieNaam, website } = req.body;
+    if (!organisatieNaam || !website) {
+        res.status(400).json({ error: "organisatieNaam en website zijn verplicht" });
+        return;
+    }
+    try {
+        // Get active prompt from Firestore (use named database 'richting01')
+        // EXACT SAME LOGIC AS analyseBranche (which works!)
+        let promptTekst = DEFAULT_CULTUUR_PROFIEL_PROMPT;
+        try {
+            const db = getFirestoreDb();
+            const promptsRef = db.collection('prompts');
+            const activePromptQuery = await promptsRef
+                .where('type', '==', 'publiek_cultuur_profiel')
+                .where('isActief', '==', true)
+                .orderBy('versie', 'desc')
+                .limit(1)
+                .get();
+            if (!activePromptQuery.empty) {
+                promptTekst = activePromptQuery.docs[0].data().promptTekst;
+                console.log(`Using active publiek_cultuur_profiel prompt version ${activePromptQuery.docs[0].data().versie}`);
+            }
+            else {
+                console.log('No active publiek_cultuur_profiel prompt found, using default');
+            }
+        }
+        catch (promptError) {
+            console.error("Error fetching prompt from Firestore:", promptError);
+            console.log("Using default prompt");
+        }
+        const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+        const prompt = `${promptTekst}
+
+ORGANISATIE NAAM: ${organisatieNaam}
+WEBSITE: ${website}
+
+Voer nu de analyse uit en geef het resultaat in het gevraagde JSON formaat.`;
+        const result = await model.generateContent(prompt);
+        const response = await result.response;
+        let jsonStr = response.text();
+        // Clean up markdown formatting
+        jsonStr = jsonStr.replace(/```json/g, '').replace(/```/g, '').trim();
+        // Try to extract JSON if it's wrapped in other text
+        const jsonMatch = jsonStr.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+            jsonStr = jsonMatch[0];
+        }
+        // Improved JSON repair: handle unescaped newlines in string values more robustly
+        // EXACT SAME LOGIC AS analyseBranche (which works!)
+        let repaired = '';
+        let inString = false;
+        let escapeNext = false;
+        for (let i = 0; i < jsonStr.length; i++) {
+            const char = jsonStr[i];
+            if (escapeNext) {
+                repaired += char;
+                escapeNext = false;
+                continue;
+            }
+            if (char === '\\') {
+                repaired += char;
+                escapeNext = true;
+                continue;
+            }
+            if (char === '"' && !escapeNext) {
+                inString = !inString;
+                repaired += char;
+                continue;
+            }
+            if (inString) {
+                // Inside a string: escape control characters
+                if (char === '\n') {
+                    repaired += '\\n';
+                }
+                else if (char === '\r') {
+                    repaired += '\\r';
+                }
+                else if (char === '\t') {
+                    repaired += '\\t';
+                }
+                else if (char === '\b') {
+                    repaired += '\\b';
+                }
+                else if (char === '\f') {
+                    repaired += '\\f';
+                }
+                else if (/[\x00-\x1F\x7F]/.test(char)) {
+                    // Remove other control characters
+                    continue;
+                }
+                else {
+                    repaired += char;
+                }
+            }
+            else {
+                // Outside a string: keep as is
+                repaired += char;
+            }
+        }
+        jsonStr = repaired;
+        let json;
+        try {
+            json = JSON.parse(jsonStr);
+            console.log('✅ JSON parsed successfully');
+            console.log('📊 Parsed JSON keys:', Object.keys(json));
+            console.log('📊 JSON scores:', json.scores);
+            console.log('📊 JSON dna:', json.dna);
+        }
+        catch (parseError) {
+            console.error("JSON Parse Error:", parseError.message);
+            const errorPos = (_a = parseError.message.match(/position (\d+)/)) === null || _a === void 0 ? void 0 : _a[1];
+            if (errorPos) {
+                const pos = parseInt(errorPos);
+                console.error("JSON String (around error position):", jsonStr.substring(Math.max(0, pos - 100), pos + 100));
+            }
+            console.error("JSON String (first 500 chars):", jsonStr.substring(0, 500));
+            // Return a structured error response with CORS headers
+            res.status(500).json({
+                error: "Failed to parse Gemini response as JSON",
+                details: parseError.message,
+                rawResponse: jsonStr.substring(0, 2000)
+            });
+            return;
+        }
+        // Transform JSON response to CultuurProfiel structure
+        // Ensure all required fields are present with defaults
+        const cultuurProfiel = {
+            // Metadata (will be added by frontend)
+            volledigRapport: json.volledigRapport || '',
+            // 1. The Executive Pulse - check if scores exists and has values
+            scores: json.scores && (json.scores.cultuurvolwassenheid !== undefined || json.scores.groeidynamiekScore !== undefined) ? {
+                cultuurvolwassenheid: (_b = json.scores.cultuurvolwassenheid) !== null && _b !== void 0 ? _b : 0,
+                groeidynamiekScore: (_c = json.scores.groeidynamiekScore) !== null && _c !== void 0 ? _c : 0,
+                cultuurfit: (_d = json.scores.cultuurfit) !== null && _d !== void 0 ? _d : 0,
+                cultuursterkte: json.scores.cultuursterkte || 'gemiddeld',
+                dynamiekType: json.scores.dynamiekType || 'organisch_groeiend'
+            } : {
+                cultuurvolwassenheid: 0,
+                groeidynamiekScore: 0,
+                cultuurfit: 0,
+                cultuursterkte: 'gemiddeld',
+                dynamiekType: 'organisch_groeiend'
+            },
+            gaps: json.gaps || [],
+            // 2. Het Cultuur DNA - check if dna exists and has typeScores
+            dna: json.dna && json.dna.typeScores ? {
+                dominantType: json.dna.dominantType || 'hybride',
+                typeScores: json.dna.typeScores || {
+                    adhocratie: 0,
+                    clan: 0,
+                    hiërarchie: 0,
+                    markt: 0
+                },
+                kernwaarden: json.dna.kernwaarden || [],
+                dimensies: json.dna.dimensies || []
+            } : {
+                dominantType: 'hybride',
+                typeScores: {
+                    adhocratie: 0,
+                    clan: 0,
+                    hiërarchie: 0,
+                    markt: 0
+                },
+                kernwaarden: [],
+                dimensies: []
+            },
+            // 3. De Impact Matrix (optional)
+            performanceData: json.performanceData || [],
+            engagementData: json.engagementData || [],
+            // 4. Obstakels & Versnellers
+            barrières: json.barrières || [],
+            opportuniteiten: json.opportuniteiten || [],
+            themas: json.themas || [],
+            // 5. De Actie-Modus
+            gedragingen: json.gedragingen || [],
+            interventies: json.interventies || []
+        };
+        console.log('📤 Sending cultuurProfiel to frontend:', JSON.stringify(cultuurProfiel, null, 2).substring(0, 1000));
+        res.json(cultuurProfiel);
+    }
+    catch (error) {
+        console.error("Cultuur Test Analyse Error:", error);
+        // Always return a response, even on error
+        res.status(500).json({
+            error: error.message || "Unknown error occurred",
+            type: error.name || "Error"
+        });
+    }
+});
+// Export Rapport naar HTML (gebruiker kan dit in Google Docs plakken of downloaden als PDF)
+// Helper function to fetch content from different sources (voor toekomstig gebruik)
+// @ts-ignore - Function kept for future use
+async function _fetchBestandContent(bestandsRef, db, firestoreDb) {
+    const { type, url, documentId } = bestandsRef;
+    try {
+        if (type === 'google_drive') {
+            // Extract file ID from URL
+            const fileId = extractFileId(url || '');
+            if (!fileId) {
+                throw new Error(`Kon geen file ID extraheren uit Google Drive URL: ${url}`);
+            }
+            const { content } = await fetchDriveFileContent(fileId, 'application/vnd.google-apps.document', undefined);
+            return content;
+        }
+        else if (type === 'kennisbank') {
+            // Fetch document from Firestore (use named database 'richting01')
+            if (!documentId) {
+                throw new Error('Document ID ontbreekt voor kennisbank document');
+            }
+            if (!firestoreDb) {
+                firestoreDb = getFirestoreDb();
+            }
+            const docRef = firestoreDb.collection('documents').doc(documentId);
+            const docSnap = await docRef.get();
+            if (!docSnap.exists) {
+                throw new Error(`Kennisbank document niet gevonden: ${documentId}`);
+            }
+            const docData = docSnap.data();
+            return (docData === null || docData === void 0 ? void 0 : docData.content) || (docData === null || docData === void 0 ? void 0 : docData.summary) || '';
+        }
+        else if (type === 'url') {
+            // Fetch content from URL
+            const response = await fetch(url || '');
+            if (!response.ok) {
+                throw new Error(`Kon URL niet ophalen: ${url} (Status: ${response.status})`);
+            }
+            const text = await response.text();
+            // Basic HTML stripping (simple approach)
+            return text.replace(/<[^>]*>/g, '').substring(0, 50000); // Limit to 50k chars
+        }
+        else {
+            throw new Error(`Onbekend bestandstype: ${type}`);
+        }
+    }
+    catch (error) {
+        console.error(`Fout bij ophalen bestand (${type}):`, error);
+        return `[Fout bij ophalen bestand: ${error.message}]`;
+    }
+}
+exports.exportRapport = (0, https_1.onRequest)({
+    cors: true,
+    timeoutSeconds: 60,
+    memory: "256MiB"
+}, async (req, res) => {
+    res.set('Access-Control-Allow-Origin', '*');
+    res.set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.set('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    if (req.method === 'OPTIONS') {
+        res.status(204).send('');
+        return;
+    }
+    const { organisatieProfiel, formaat } = req.body;
+    if (!organisatieProfiel || !formaat) {
+        res.status(400).json({ error: "organisatieProfiel en formaat zijn verplicht" });
+        return;
+    }
+    try {
+        // Generate HTML content
+        const htmlContent = generateHTMLRapport(organisatieProfiel);
+        if (formaat === 'google_docs') {
+            // For Google Docs: Return HTML that can be opened and imported
+            // Note: Direct Google Docs API integration requires OAuth setup which is complex
+            // This solution opens Google Docs and provides HTML for import
+            res.json({
+                htmlContent,
+                instructions: "Het HTML bestand wordt voorbereid. Google Docs wordt geopend.",
+                downloadUrl: `data:text/html;charset=utf-8,${encodeURIComponent(htmlContent)}`
+            });
+        }
+        else if (formaat === 'pdf') {
+            // For PDF, return HTML that can be printed to PDF
+            res.json({
+                htmlContent,
+                instructions: "Open de HTML in een browser en gebruik 'Print to PDF' of download het bestand.",
+                downloadUrl: `data:text/html;charset=utf-8,${encodeURIComponent(htmlContent)}`
+            });
+        }
+        else {
+            res.status(400).json({ error: "Ongeldig formaat. Gebruik 'google_docs' of 'pdf'" });
+        }
+    }
+    catch (error) {
+        console.error("Export Error:", error);
+        res.status(500).json({
+            error: error.message || "Unknown error occurred",
+            type: error.name || "Error"
+        });
+    }
+});
+// Helper function to generate HTML report
+function generateHTMLRapport(profiel) {
+    const date = new Date(profiel.analyseDatum).toLocaleDateString('nl-NL');
+    let html = `<!DOCTYPE html>
+<html lang="nl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Organisatie Profiel - ${profiel.organisatieNaam}</title>
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 800px; margin: 40px auto; padding: 20px; line-height: 1.6; }
+        h1 { color: #ea580c; border-bottom: 3px solid #ea580c; padding-bottom: 10px; }
+        h2 { color: #334155; margin-top: 30px; border-bottom: 2px solid #e2e8f0; padding-bottom: 5px; }
+        h3 { color: #475569; margin-top: 20px; }
+        table { width: 100%; border-collapse: collapse; margin: 20px 0; }
+        th, td { border: 1px solid #e2e8f0; padding: 10px; text-align: left; }
+        th { background-color: #f1f5f9; font-weight: bold; }
+        .rating { display: inline-block; padding: 5px 15px; border-radius: 20px; font-weight: bold; }
+        .rating.laag { background-color: #dcfce7; color: #166534; }
+        .rating.gemiddeld { background-color: #fef3c7; color: #92400e; }
+        .rating.hoog { background-color: #fed7aa; color: #9a3412; }
+        .rating.zeer_hoog { background-color: #fee2e2; color: #991b1b; }
+        .score-box { display: inline-block; padding: 10px 20px; background-color: #f1f5f9; border-radius: 5px; margin: 10px 5px; }
+        .risico-categorie { display: inline-block; padding: 3px 10px; border-radius: 3px; font-size: 0.85em; margin: 2px; }
+        .risico-categorie.psychisch { background-color: #e9d5ff; color: #6b21a8; }
+        .risico-categorie.fysiek { background-color: #dbeafe; color: #1e40af; }
+        .risico-categorie.overige { background-color: #f3f4f6; color: #374151; }
+    </style>
+</head>
+<body>
+    <h1>Organisatie Profiel: ${profiel.organisatieNaam}</h1>
+    <p><strong>Website:</strong> ${profiel.website}</p>
+    <p><strong>Analyse Datum:</strong> ${date}</p>
+    
+    <div style="margin: 20px 0;">
+        <div class="score-box">
+            <strong>Rating:</strong> <span class="rating ${profiel.rating.werkEnGezondheid}">${getRatingLabel(profiel.rating.werkEnGezondheid)}</span>
+        </div>
+        <div class="score-box">
+            <strong>Totaal Score:</strong> ${profiel.totaalScore}
+        </div>
+        <div class="score-box">
+            <strong>Gemiddelde Risico:</strong> ${profiel.gemiddeldeRisicoScore.toFixed(1)}
+        </div>
+    </div>`;
+    // Add full report - convert markdown to HTML
+    if (profiel.volledigRapport) {
+        html += `<h2>Volledig Rapport</h2>
+        <div style="white-space: pre-wrap; background-color: #f8fafc; padding: 20px; border-radius: 5px; font-family: Arial, sans-serif;">
+${convertMarkdownToHTML(profiel.volledigRapport)}
+        </div>`;
+    }
+    // Add risks table
+    if (profiel.risicos && profiel.risicos.length > 0) {
+        html += `<h2>Risico's</h2>
+        <table>
+            <thead>
+                <tr>
+                    <th>Risico</th>
+                    <th>Categorie</th>
+                    <th>Kans</th>
+                    <th>Effect</th>
+                    <th>Score</th>
+                </tr>
+            </thead>
+            <tbody>`;
+        profiel.risicos.forEach((risico) => {
+            html += `<tr>
+                <td>${risico.naam}</td>
+                <td><span class="risico-categorie ${risico.categorie}">${risico.categorie}</span></td>
+                <td>${risico.kans}</td>
+                <td>${risico.effect}</td>
+                <td><strong>${risico.totaalScore}</strong></td>
+            </tr>`;
+        });
+        html += `</tbody></table>`;
+    }
+    html += `</body></html>`;
+    return html;
+}
+function getRatingLabel(rating) {
+    const labels = {
+        'laag': 'Laag Risico',
+        'gemiddeld': 'Gemiddeld Risico',
+        'hoog': 'Hoog Risico',
+        'zeer_hoog': 'Zeer Hoog Risico'
+    };
+    return labels[rating] || rating;
+}
+// Helper function to convert markdown to HTML
+function convertMarkdownToHTML(markdown) {
+    let html = markdown;
+    // Convert headers
+    html = html.replace(/^### (.*$)/gim, '<h3>$1</h3>');
+    html = html.replace(/^## (.*$)/gim, '<h2>$1</h2>');
+    html = html.replace(/^# (.*$)/gim, '<h1>$1</h1>');
+    // Convert bold
+    html = html.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+    // Convert italic
+    html = html.replace(/\*(.*?)\*/g, '<em>$1</em>');
+    // Convert lists
+    html = html.replace(/^\- (.*$)/gim, '<li>$1</li>');
+    // Wrap list items in ul tags (using [\s\S] instead of . with s flag for compatibility)
+    html = html.replace(/(<li>[\s\S]*?<\/li>)/g, '<ul>$1</ul>');
+    // Convert tables (basic)
+    html = html.replace(/\|(.*)\|/g, (match) => {
+        const cells = match.split('|').filter(c => c.trim());
+        if (cells.length > 0) {
+            return '<tr>' + cells.map(c => `<td>${c.trim()}</td>`).join('') + '</tr>';
+        }
+        return match;
+    });
+    // Convert line breaks
+    html = html.replace(/\n\n/g, '</p><p>');
+    html = html.replace(/\n/g, '<br>');
+    // Wrap in paragraphs
+    html = '<p>' + html + '</p>';
+    return html;
+}
+// Endpoint voor website zoeken op basis van bedrijfsnaam
+exports.searchCompanyWebsite = (0, https_1.onRequest)({ cors: true }, async (req, res) => {
+    // Set CORS headers explicitly
+    res.set('Access-Control-Allow-Origin', '*');
+    res.set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.set('Access-Control-Allow-Headers', 'Content-Type');
+    // Handle preflight
+    if (req.method === 'OPTIONS') {
+        res.status(204).send('');
+        return;
+    }
+    if (!genAI) {
+        res.status(500).json({ error: "Server misconfiguration: API Key missing." });
+        return;
+    }
+    const { companyName } = req.body;
+    if (!companyName) {
+        res.status(400).json({ error: "companyName is verplicht" });
+        return;
+    }
+    try {
+        const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+        const prompt = `Je bent een assistent die helpt bij het vinden van de officiële website van een bedrijf.
+
+BEDRIJFSNAAM: ${companyName}
+
+BELANGRIJK:
+- Voor Nederlandse bedrijven: geef .nl domeinen ALTIJD prioriteit, gevolgd door .com
+- Probeer eerst: [bedrijfsnaam].nl en [bedrijfsnaam].com
+- Voor het bedrijf "Richting": zoek specifiek naar "richting.nl" en "richting.com"
+- Verwijder spaties en speciale tekens uit de bedrijfsnaam voor het domein (bijv. "Jansen Bouw" -> "jansenbouw.nl")
+- Geef maximaal 5 resultaten, gesorteerd op waarschijnlijkheid (meest waarschijnlijk eerst)
+- .nl domeinen krijgen "high" confidence, .com krijgt "high" of "medium", andere TLDs krijgen "medium" of "low"
+
+Geef het antwoord ALLEEN in puur JSON formaat:
+{
+  "websites": [
+    {
+      "url": "https://bedrijfsnaam.nl",
+      "title": "Bedrijfsnaam - Officiële Website",
+      "snippet": "Korte beschrijving van de website",
+      "confidence": "high|medium|low"
+    }
+  ]
+}
+
+Zorg dat alle URLs volledig zijn (met https://). Als je geen website kunt vinden, geef dan een lege array terug.`;
+        const result = await model.generateContent(prompt);
+        const response = await result.response;
+        let jsonStr = response.text();
+        // Clean up markdown formatting
+        jsonStr = jsonStr.replace(/```json/g, '').replace(/```/g, '').trim();
+        // Try to extract JSON if it's wrapped in other text
+        const jsonMatch = jsonStr.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+            jsonStr = jsonMatch[0];
+        }
+        let json;
+        try {
+            json = JSON.parse(jsonStr);
+        }
+        catch (parseError) {
+            console.error("JSON Parse Error:", parseError.message);
+            // Return empty results if parsing fails
+            res.json({ websites: [] });
+            return;
+        }
+        // Validate and return results
+        const websites = (json.websites || []).map((w) => ({
+            url: w.url || '',
+            title: w.title || w.url || '',
+            snippet: w.snippet || '',
+            confidence: w.confidence || 'medium'
+        })).filter((w) => w.url && w.url.startsWith('http'));
+        res.json({ websites });
+    }
+    catch (error) {
+        console.error("Website Search Error:", error);
+        res.status(500).json({
+            error: error.message || "Unknown error occurred",
+            websites: []
+        });
+    }
+});
+// Endpoint voor het zoeken naar RIE rapportages in Google Drive
+exports.checkRIERapportage = (0, https_1.onRequest)({
+    cors: true,
+    invoker: 'public'
+}, async (req, res) => {
+    var _a, _b, _c, _d;
+    res.set('Access-Control-Allow-Origin', '*');
+    res.set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.set('Access-Control-Allow-Headers', 'Content-Type');
+    if (req.method === 'OPTIONS') {
+        res.status(204).send('');
+        return;
+    }
+    try {
+        const { folderId } = req.body;
+        console.log(`🔍 Checking RIE rapportage for folder ID: ${folderId}`);
+        if (!folderId) {
+            res.status(400).json({ error: 'Folder ID is required' });
+            return;
+        }
+        // Initialize Google Drive API using Application Default Credentials
+        // This will use the Firebase default service account
+        // Make sure the service account has access to the Google Drive folders
+        const auth = new googleapis_1.google.auth.GoogleAuth({
+            scopes: ['https://www.googleapis.com/auth/drive.readonly'],
+            // Use Application Default Credentials (ADC) - Firebase Functions default service account
+        });
+        const drive = googleapis_1.google.drive({ version: 'v3', auth });
+        // Helper function to normalize folder names for matching
+        const normalizeFolderName = (name) => {
+            return name.toLowerCase()
+                .replace(/&/g, '')
+                .replace(/[''"]/g, '') // Remove apostrophes and quotes
+                .replace(/[^a-z0-9]/g, '')
+                .trim();
+        };
+        // Helper function to check if a folder name matches RIE patterns
+        const isRIEFolder = (folderName) => {
+            if (!folderName)
+                return false;
+            const normalized = normalizeFolderName(folderName);
+            console.log(`   🔍 Checking folder name: "${folderName}" -> normalized: "${normalized}"`);
+            // Match: "rie", "ri&e", "ries", "ri&es", "risicoinventarisatie", etc.
+            const matches = normalized.includes('rie') ||
+                normalized.includes('risicoinventarisatie') ||
+                normalized.includes('risicoevaluatie');
+            if (matches) {
+                console.log(`   ✅ MATCH: "${folderName}" is a RIE folder!`);
+            }
+            return matches;
+        };
+        // Recursive function to search for RIE folder in a folder and its subfolders
+        const findRIEFolderRecursive = async (parentFolderId, depth = 0, maxDepth = 3) => {
+            var _a, _b;
+            if (depth > maxDepth) {
+                console.log(`   ⚠️ Max depth (${maxDepth}) reached, stopping search`);
+                return null;
+            }
+            const indent = '  '.repeat(depth);
+            console.log(`${indent}📂 Searching in folder (depth ${depth}): ${parentFolderId}`);
+            try {
+                // List all folders in the current folder
+                const foldersResponse = await drive.files.list({
+                    q: `'${parentFolderId}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`,
+                    fields: 'files(id, name)',
+                    pageSize: 100
+                });
+                const allFolders = foldersResponse.data.files || [];
+                console.log(`${indent}📁 Found ${allFolders.length} folders:`);
+                allFolders.forEach(folder => {
+                    console.log(`${indent}   - "${folder.name}" (ID: ${folder.id})`);
+                });
+                // If no folders found, it might be a permission issue
+                if (allFolders.length === 0 && depth === 0) {
+                    console.log(`${indent}⚠️ No folders found in root folder. This might indicate a permission issue.`);
+                }
+                // First, check if any direct subfolder is a RIE folder
+                const rieFolder = allFolders.find(folder => {
+                    if (!folder.name)
+                        return false;
+                    const matches = isRIEFolder(folder.name);
+                    if (matches) {
+                        console.log(`${indent}   ✅ MATCH found: "${folder.name}"`);
+                    }
+                    return matches;
+                });
+                if (rieFolder === null || rieFolder === void 0 ? void 0 : rieFolder.id) {
+                    console.log(`${indent}✅ Found RIE folder: "${rieFolder.name}" (ID: ${rieFolder.id})`);
+                    return rieFolder.id;
+                }
+                // If not found, recursively search in subfolders
+                console.log(`${indent}⚠️ No RIE folder found in direct children, searching in subfolders...`);
+                for (const subfolder of allFolders) {
+                    if (subfolder.id) {
+                        const found = await findRIEFolderRecursive(subfolder.id, depth + 1, maxDepth);
+                        if (found) {
+                            return found;
+                        }
+                    }
+                }
+                return null;
+            }
+            catch (error) {
+                console.error(`${indent}❌ Error searching in folder ${parentFolderId}:`, error.message);
+                console.error(`${indent}   Error code: ${error.code}, Error details:`, JSON.stringify(error, null, 2));
+                // If it's a permission error, log it clearly
+                if (error.code === 403 || ((_a = error.message) === null || _a === void 0 ? void 0 : _a.includes('permission')) || ((_b = error.message) === null || _b === void 0 ? void 0 : _b.includes('access'))) {
+                    console.error(`${indent}   ⚠️ PERMISSION ERROR: Service account may not have access to this folder`);
+                }
+                return null;
+            }
+        };
+        // Start recursive search from the root folder
+        let rieFolderId = null;
+        try {
+            // First, verify we can access the root folder
+            try {
+                const rootFolder = await drive.files.get({
+                    fileId: folderId,
+                    fields: 'id, name, mimeType'
+                });
+                console.log(`✅ Can access root folder: "${rootFolder.data.name}" (ID: ${folderId}, Type: ${rootFolder.data.mimeType})`);
+            }
+            catch (accessError) {
+                console.error(`❌ Cannot access root folder ${folderId}:`, accessError.message);
+                if (accessError.code === 404) {
+                    res.status(404).json({
+                        error: 'Folder niet gevonden. Controleer of de folder ID correct is.',
+                        aanwezig: false,
+                        actueel: false
+                    });
+                    return;
+                }
+                if (accessError.code === 403) {
+                    res.status(403).json({
+                        error: 'Service account heeft geen toegang tot deze Google Drive map. Geef de service account "Viewer" toegang tot de map.',
+                        aanwezig: false,
+                        actueel: false
+                    });
+                    return;
+                }
+            }
+            console.log(`🔍 Starting recursive search for RIE folder in: ${folderId}`);
+            rieFolderId = await findRIEFolderRecursive(folderId, 0, 3);
+            if (rieFolderId) {
+                console.log(`✅ RIE folder found: ${rieFolderId}`);
+            }
+            else {
+                console.log(`⚠️ No RIE folder found after recursive search`);
+            }
+        }
+        catch (error) {
+            console.error('Error finding RIE folder:', error);
+            // Check if it's an authentication error
+            if (error.code === 403 || ((_a = error.message) === null || _a === void 0 ? void 0 : _a.includes('permission')) || ((_b = error.message) === null || _b === void 0 ? void 0 : _b.includes('access'))) {
+                console.error('Authentication error - service account needs access to Google Drive folders');
+                res.status(403).json({
+                    error: 'Service account heeft geen toegang tot deze Google Drive map. Geef de service account toegang tot de map.',
+                    aanwezig: false,
+                    actueel: false
+                });
+                return;
+            }
+            // Continue even if we can't find the folder (might not exist)
+        }
+        // If we found the RIE folder, search for files in it
+        let rieFiles = [];
+        let latestFile = null;
+        let latestDate = null;
+        if (rieFolderId) {
+            try {
+                // Search for ALL files in RIE folder (not just those with "RIE" in name)
+                // Since the folder is already identified as RIE, all files in it are likely RIE-related
+                // Filter for common document types: PDFs, Word docs, Google Docs
+                const filesResponse = await drive.files.list({
+                    q: `'${rieFolderId}' in parents and trashed=false and (mimeType='application/pdf' or mimeType='application/vnd.google-apps.document' or mimeType='application/vnd.openxmlformats-officedocument.wordprocessingml.document' or mimeType='application/msword')`,
+                    fields: 'files(id, name, modifiedTime, mimeType, webViewLink)',
+                    orderBy: 'modifiedTime desc',
+                    pageSize: 100
+                });
+                rieFiles = filesResponse.data.files || [];
+                console.log(`✅ Found ${rieFiles.length} files in RIE folder`);
+                // Find the most recent file
+                if (rieFiles.length > 0) {
+                    latestFile = rieFiles[0];
+                    if (latestFile.modifiedTime) {
+                        latestDate = new Date(latestFile.modifiedTime);
+                        console.log(`✅ Latest RIE file: "${latestFile.name}" (modified: ${latestDate.toISOString()})`);
+                    }
+                }
+                else {
+                    console.log(`⚠️ No files found in RIE folder ${rieFolderId}`);
+                }
+            }
+            catch (error) {
+                console.error('Error searching RIE files:', error);
+                // Check if it's an authentication error
+                if (error.code === 403 || ((_c = error.message) === null || _c === void 0 ? void 0 : _c.includes('permission')) || ((_d = error.message) === null || _d === void 0 ? void 0 : _d.includes('access'))) {
+                    console.error('Authentication error - service account needs access to Google Drive folders');
+                    // Don't return error, just return no results
+                }
+            }
+        }
+        // Determine if RIE is present and current
+        const isPresent = rieFiles.length > 0;
+        const oneYearAgo = new Date();
+        oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
+        const isActueel = latestDate ? latestDate >= oneYearAgo : false;
+        res.json({
+            aanwezig: isPresent,
+            actueel: isActueel,
+            laatsteUpdate: latestDate === null || latestDate === void 0 ? void 0 : latestDate.toISOString(),
+            bestandsnaam: latestFile === null || latestFile === void 0 ? void 0 : latestFile.name,
+            webViewLink: (latestFile === null || latestFile === void 0 ? void 0 : latestFile.webViewLink) || ((latestFile === null || latestFile === void 0 ? void 0 : latestFile.id) ? `https://drive.google.com/file/d/${latestFile.id}/view` : undefined),
+            aantalBestanden: rieFiles.length
+        });
+    }
+    catch (error) {
+        console.error('Error checking RIE rapportage:', error);
+        res.status(500).json({
+            error: 'Failed to check RIE rapportage',
+            details: error.message
+        });
+    }
+});
+// Endpoint voor het automatisch zoeken naar Google Drive mappen op basis van klantnaam
+exports.searchDriveFolder = (0, https_1.onRequest)({
+    cors: true,
+    invoker: 'public'
+}, async (req, res) => {
+    var _a, _b;
+    res.set('Access-Control-Allow-Origin', '*');
+    res.set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.set('Access-Control-Allow-Headers', 'Content-Type');
+    if (req.method === 'OPTIONS') {
+        res.status(204).send('');
+        return;
+    }
+    try {
+        const { customerName } = req.body;
+        if (!customerName) {
+            res.status(400).json({ error: 'Customer name is required' });
+            return;
+        }
+        // Initialize Google Drive API
+        const auth = new googleapis_1.google.auth.GoogleAuth({
+            scopes: ['https://www.googleapis.com/auth/drive.readonly'],
+        });
+        const drive = googleapis_1.google.drive({ version: 'v3', auth });
+        // Search for folders matching the customer name
+        // We'll search in a parent folder if you have one, or search globally
+        // For now, we'll search for folders with the customer name
+        // Try to find a parent "Klanten" or "Customers" folder first
+        let parentFolderId = null;
+        try {
+            // Search for a parent folder that might contain all customer folders
+            // You can customize this search query based on your folder structure
+            const parentSearch = await drive.files.list({
+                q: "mimeType='application/vnd.google-apps.folder' and trashed=false and (name contains 'Klanten' or name contains 'Customers' or name contains 'Clienten')",
+                fields: 'files(id, name)',
+                pageSize: 10
+            });
+            // Use the first matching parent folder if found
+            if (parentSearch.data.files && parentSearch.data.files.length > 0) {
+                parentFolderId = parentSearch.data.files[0].id || null;
+            }
+        }
+        catch (error) {
+            console.log('No parent folder found, searching globally');
+        }
+        // Search for folders matching customer name
+        const searchQuery = parentFolderId
+            ? `'${parentFolderId}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false and name contains '${customerName}'`
+            : `mimeType='application/vnd.google-apps.folder' and trashed=false and name contains '${customerName}'`;
+        const foldersResponse = await drive.files.list({
+            q: searchQuery,
+            fields: 'files(id, name, webViewLink)',
+            pageSize: 20,
+            orderBy: 'modifiedTime desc'
+        });
+        const folders = foldersResponse.data.files || [];
+        // Filter and rank results by name similarity
+        const rankedFolders = folders
+            .map(folder => {
+            const name = folder.name || '';
+            const similarity = calculateSimilarity(customerName.toLowerCase(), name.toLowerCase());
+            return {
+                id: folder.id,
+                name: folder.name,
+                webViewLink: folder.webViewLink || `https://drive.google.com/drive/folders/${folder.id}`,
+                similarity
+            };
+        })
+            .filter(f => f.similarity > 0.3) // Only include folders with >30% similarity
+            .sort((a, b) => b.similarity - a.similarity); // Sort by similarity
+        res.json({
+            folders: rankedFolders,
+            bestMatch: rankedFolders.length > 0 ? rankedFolders[0] : null
+        });
+    }
+    catch (error) {
+        console.error('Error searching Drive folder:', error);
+        // Check if it's an authentication error
+        if (error.code === 403 || ((_a = error.message) === null || _a === void 0 ? void 0 : _a.includes('permission')) || ((_b = error.message) === null || _b === void 0 ? void 0 : _b.includes('access'))) {
+            res.status(403).json({
+                error: 'Service account heeft geen toegang. Geef de service account toegang tot Google Drive.',
+                folders: []
+            });
+            return;
+        }
+        res.status(500).json({
+            error: 'Failed to search Drive folder',
+            details: error.message,
+            folders: []
+        });
+    }
+});
+// Helper function to calculate string similarity (simple Levenshtein-based)
+function calculateSimilarity(str1, str2) {
+    // Simple similarity: check if one contains the other, or calculate character overlap
+    const s1 = str1.toLowerCase().trim();
+    const s2 = str2.toLowerCase().trim();
+    // Exact match
+    if (s1 === s2)
+        return 1.0;
+    // One contains the other
+    if (s1.includes(s2) || s2.includes(s1)) {
+        return Math.max(s1.length, s2.length) / Math.min(s1.length, s2.length) * 0.8;
+    }
+    // Calculate character overlap
+    const longer = s1.length > s2.length ? s1 : s2;
+    const shorter = s1.length > s2.length ? s2 : s1;
+    let matches = 0;
+    for (let i = 0; i < shorter.length; i++) {
+        if (longer.includes(shorter[i])) {
+            matches++;
+        }
+    }
+    return matches / longer.length;
+}
+// Endpoint voor het ophalen van alle klantmappen uit de "Klanten" map
+exports.getCustomerFolders = (0, https_1.onRequest)({
+    invoker: 'public' // Make function publicly accessible
+}, async (req, res) => {
+    var _a, _b;
+    console.log(`📥 getCustomerFolders called - Method: ${req.method}, Headers:`, JSON.stringify(req.headers));
+    // Handle preflight OPTIONS request FIRST
+    if (req.method === 'OPTIONS') {
+        console.log('✅ Handling OPTIONS preflight request');
+        res.set('Access-Control-Allow-Origin', '*');
+        res.set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+        res.set('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+        res.set('Access-Control-Max-Age', '3600');
+        console.log('✅ CORS headers set for OPTIONS, sending 204');
+        res.status(204).end();
+        return;
+    }
+    console.log(`📥 Processing ${req.method} request`);
+    // Set CORS headers for all other requests
+    res.set('Access-Control-Allow-Origin', '*');
+    res.set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.set('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    try {
+        const { parentFolderId } = req.body; // Optioneel: specifieke parent folder ID
+        // Initialize Google Drive API
+        const auth = new googleapis_1.google.auth.GoogleAuth({
+            scopes: ['https://www.googleapis.com/auth/drive.readonly'],
+        });
+        const drive = googleapis_1.google.drive({ version: 'v3', auth });
+        let klantenFolderId = parentFolderId || null;
+        // Als geen parentFolderId is opgegeven, zoek naar "Klanten" map
+        if (!klantenFolderId) {
+            console.log('🔍 Searching for "Klanten" folder...');
+            // Zoek naar folders met namen zoals "Klanten", "Customers", "Clienten"
+            const searchTerms = ['Klanten', 'Customers', 'Clienten', 'Klantendossiers'];
+            for (const term of searchTerms) {
+                try {
+                    const searchResponse = await drive.files.list({
+                        q: `mimeType='application/vnd.google-apps.folder' and trashed=false and (name='${term}' or name contains '${term}')`,
+                        fields: 'files(id, name)',
+                        pageSize: 10
+                    });
+                    if (searchResponse.data.files && searchResponse.data.files.length > 0) {
+                        klantenFolderId = searchResponse.data.files[0].id || null;
+                        console.log(`✅ Found "${term}" folder: ${klantenFolderId}`);
+                        break;
+                    }
+                }
+                catch (error) {
+                    console.log(`⚠️ Error searching for "${term}":`, error.message);
+                }
+            }
+            if (!klantenFolderId) {
+                res.set('Access-Control-Allow-Origin', '*');
+                res.status(404).json({
+                    error: 'Geen "Klanten" map gevonden. Geef een parentFolderId op of zorg dat er een map met de naam "Klanten", "Customers" of "Clienten" bestaat.',
+                    folders: []
+                });
+                return;
+            }
+        }
+        else {
+            // Verifieer dat de opgegeven folder bestaat
+            try {
+                const folderInfo = await drive.files.get({
+                    fileId: klantenFolderId,
+                    fields: 'id, name, mimeType'
+                });
+                console.log(`✅ Using provided folder: "${folderInfo.data.name}" (${klantenFolderId})`);
+            }
+            catch (error) {
+                res.set('Access-Control-Allow-Origin', '*');
+                if (error.code === 404) {
+                    res.status(404).json({
+                        error: 'Folder niet gevonden',
+                        folders: []
+                    });
+                    return;
+                }
+                if (error.code === 403) {
+                    res.status(403).json({
+                        error: 'Service account heeft geen toegang tot deze map',
+                        folders: []
+                    });
+                    return;
+                }
+                throw error;
+            }
+        }
+        // Haal alle submappen op uit de Klanten map
+        console.log(`📂 Fetching customer folders from: ${klantenFolderId}`);
+        const foldersResponse = await drive.files.list({
+            q: `'${klantenFolderId}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`,
+            fields: 'files(id, name, webViewLink, modifiedTime)',
+            pageSize: 500, // Genoeg voor veel klanten
+            orderBy: 'name'
+        });
+        const folders = foldersResponse.data.files || [];
+        console.log(`✅ Found ${folders.length} customer folders`);
+        // Format de folders voor de response
+        const customerFolders = folders.map(folder => ({
+            id: folder.id,
+            name: folder.name || 'Onbekend',
+            webViewLink: folder.webViewLink || `https://drive.google.com/drive/folders/${folder.id}`,
+            modifiedTime: folder.modifiedTime
+        }));
+        res.json({
+            parentFolderId: klantenFolderId,
+            folders: customerFolders,
+            count: customerFolders.length
+        });
+    }
+    catch (error) {
+        console.error('Error getting customer folders:', error);
+        // Ensure CORS headers are set even on errors
+        res.set('Access-Control-Allow-Origin', '*');
+        res.set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+        res.set('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+        // Check if it's an authentication error
+        if (error.code === 403 || ((_a = error.message) === null || _a === void 0 ? void 0 : _a.includes('permission')) || ((_b = error.message) === null || _b === void 0 ? void 0 : _b.includes('access'))) {
+            res.status(403).json({
+                error: 'Service account heeft geen toegang. Geef de service account toegang tot Google Drive.',
+                folders: []
+            });
+            return;
+        }
+        res.status(500).json({
+            error: 'Failed to get customer folders',
+            details: error.message,
+            folders: []
+        });
+    }
+});
+//# sourceMappingURL=index.js.map
