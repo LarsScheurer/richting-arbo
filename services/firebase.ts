@@ -11,7 +11,8 @@ import {
   User as FirebaseUser
 } from 'firebase/auth';
 import { 
-  getFirestore, 
+  getFirestore,
+  initializeFirestore,
   collection, 
   getDocs, 
   setDoc, 
@@ -42,7 +43,13 @@ const firebaseConfig = {
 // --- STAP 2: INITIALISATIE ---
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
-const db = getFirestore(app, 'richting01'); // HARDE KOPPELING
+
+// Firestore Database
+// LET OP: In je code wordt specifiek verbinding gemaakt met database id "richting01"
+// Dit is NIET de default database, dus we moeten hem specifiek zo initialiseren.
+const db = initializeFirestore(app, {
+  ignoreUndefinedProperties: true
+}, "richting01"); // Gebruik initializeFirestore voor named database
 
 console.log("Firebase geinitialiseerd. Project:", firebaseConfig.projectId, "Database: richting01");
 

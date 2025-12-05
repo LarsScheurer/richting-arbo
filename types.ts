@@ -43,6 +43,9 @@ export interface Customer {
   logoUrl?: string;
   assignedUserIds: string[]; // List of users who have access to this client
   createdAt: string;
+  employeeCount?: number; // Aantal medewerkers
+  hasRIE?: boolean; // Heeft Risico Inventarisatie & Evaluatie
+  notes?: string; // Extra notities/info
 }
 
 export enum DocType {

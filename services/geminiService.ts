@@ -1,16 +1,21 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { GeminiAnalysisResult, DocumentSource, KNOWLEDGE_STRUCTURE } from '../types';
 
+// Configuratie voor het model - gebruik gemini-2.5-flash zoals in werkende versie
+const modelConfig = {
+  model: "gemini-2.5-flash"
+};
+
 const genAI = process.env.API_KEY ? new GoogleGenerativeAI(process.env.API_KEY) : null;
 
 export const analyzeContent = async (text: string): Promise<GeminiAnalysisResult> => {
   if (!genAI) {
-    console.warn("No API Key provided. Returning mock analysis.");
+    console.warn("No API Key provided.");
     return {
-      summary: "AI analyse niet beschikbaar (geen API key). Dit is een placeholder.",
+      summary: "Fout bij automatische analyse.",
       mainCategoryId: 'strategy',
       subCategoryId: 'yearplan',
-      tags: ["Demo", "NoKey"]
+      tags: ["Error"]
     };
   }
 
@@ -18,8 +23,8 @@ export const analyzeContent = async (text: string): Promise<GeminiAnalysisResult
     // Construct a string representation of the category structure for the prompt
     const structureDescription = KNOWLEDGE_STRUCTURE.map(c => 
       `HOOFDCATEGORIE: ${c.label} (ID: ${c.id})
-       SUBCATEGORIEËN: ${c.subCategories.map(sub => `${sub.label} (ID: ${sub.id})`).join(', ')}`
-    ).join('\n\n');
+       SUBCATEGORIEËN: ${c.subCategories.map(sub => `${sub.label} (ID: ${sub.id})`).join(", ")}`
+    ).join("\n");
 
     const prompt = `
       Je bent een content analist voor Richting.nl. Analyseer de volgende tekst.
@@ -44,55 +49,53 @@ export const analyzeContent = async (text: string): Promise<GeminiAnalysisResult
       }
     `;
 
-    const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+    // Het model aanroepen - gebruik modelConfig zoals in werkende versie
+    const model = genAI.getGenerativeModel(modelConfig);
     const result = await model.generateContent(prompt);
     const response = await result.response;
-    const textResponse = response.text();
     
-    // Try to parse JSON from response
-    let jsonStr = textResponse.replace(/```json/g, '').replace(/```/g, '').trim();
-    const jsonMatch = jsonStr.match(/\{[\s\S]*\}/);
+    // De JSON uit de tekst halen (soms zet Gemini er markdown omheen)
+    let jsonString = response.text().replace(/```json/g, "").replace(/```/g, "").trim();
+    
+    // Fallback voor als er extra tekst omheen zit
+    const jsonMatch = jsonString.match(/\{[\s\S]*\}/);
     if (jsonMatch) {
-      jsonStr = jsonMatch[0];
+      jsonString = jsonMatch[0];
     }
-    const resultData = JSON.parse(jsonStr);
-    
-    // Fallback validation
-    const mainCat = KNOWLEDGE_STRUCTURE.find(c => c.id === resultData.mainCategoryId) || KNOWLEDGE_STRUCTURE[0];
-    const isValidSub = mainCat.subCategories.some(sub => sub.id === resultData.subCategoryId);
-    
-    // If subcategory doesn't match main category, default to first sub
-    const finalSubId = isValidSub ? resultData.subCategoryId : mainCat.subCategories[0].id;
+
+    const data = JSON.parse(jsonString);
+
+    // Validatie of de categorie bestaat, anders fallback naar de eerste
+    const mainCat = KNOWLEDGE_STRUCTURE.find(c => c.id === data.mainCategoryId) || KNOWLEDGE_STRUCTURE[0];
+    const subCatId = mainCat.subCategories.some(s => s.id === data.subCategoryId) 
+        ? data.subCategoryId 
+        : mainCat.subCategories[0].id;
 
     return {
-      summary: resultData.summary || "Geen samenvatting.",
+      summary: data.summary || "Geen samenvatting beschikbaar.",
       mainCategoryId: mainCat.id,
-      subCategoryId: finalSubId,
-      tags: resultData.tags || []
+      subCategoryId: subCatId,
+      tags: data.tags || []
     };
 
   } catch (error) {
     console.error("Gemini analysis failed:", error);
+    // Fallback object bij error
     return {
-      summary: "Fout bij analyse.",
-      mainCategoryId: 'strategy',
-      subCategoryId: 'yearplan',
+      summary: "Fout bij automatische analyse.",
+      mainCategoryId: "strategy",
+      subCategoryId: "yearplan",
       tags: ["Error"]
     };
   }
 };
 
 export const askQuestion = async (question: string, contextDocs: DocumentSource[]): Promise<{answer: string, citedIds: string[]}> => {
-  if (!genAI) return { answer: "Configureer de API key om de AI assistent te gebruiken.", citedIds: [] };
+  if (!genAI) return { answer: "Configureer de API key.", citedIds: [] };
 
   try {
-    const contextText = contextDocs
-      .filter(d => !d.isArchived)
-      .slice(0, 15)
-      .map(d => `ID: ${d.id}\nTITEL: ${d.title}\nCATEGORIE: ${d.mainCategoryId}\nINHOUD: ${d.content.substring(0, 800)}\n---`)
-      .join('\n');
-
-    const prompt = `
+    // Context opbouwen met documenten
+    const context = `
       Je bent de AI Kennisbank assistent van Richting.nl.
       Beantwoord de vraag op basis van de bronnen.
       
@@ -102,22 +105,28 @@ export const askQuestion = async (question: string, contextDocs: DocumentSource[
       - Als het antwoord niet in de bronnen staat, geef dit aan.
       
       BRONNEN:
-      ${contextText}
+      ${contextDocs.filter(doc => !doc.isArchived).slice(0, 15).map(doc => `ID: ${doc.id}
+TITEL: ${doc.title}
+CATEGORIE: ${doc.mainCategoryId}
+INHOUD: ${doc.content.substring(0, 800)}
+---`).join("\n")}
       
       VRAAG:
       ${question}
     `;
 
-    const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
-    const result = await model.generateContent(prompt);
+    const model = genAI.getGenerativeModel(modelConfig);
+    const result = await model.generateContent(context);
     const response = await result.response;
 
     return {
       answer: response.text() || "Geen antwoord.",
+      citedIds: [] // Citations zou je hier nog complexer kunnen parsen als je wilt
+    };
+  } catch (error) {
+    return {
+      answer: "Excuses, ik kan de vraag niet verwerken.",
       citedIds: []
     };
-
-  } catch (error) {
-    return { answer: "Excuses, ik kan de vraag niet verwerken.", citedIds: [] };
   }
 };

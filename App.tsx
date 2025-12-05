@@ -67,9 +67,9 @@ const convertEffectToFineKinney = (oldValue: number): number => {
 
 const getStatusLabel = (status: string) => {
   switch (status) {
-    case 'active': return 'Actief';
+    case 'active': return 'ACTIEF';
     case 'churned': return 'Gearchiveerd';
-    case 'prospect': return 'Prospect';
+    case 'prospect': return 'PROSPECT';
     case 'rejected': return 'Afgewezen';
     default: return status;
   }
@@ -943,6 +943,8 @@ const CustomersView = ({ user, onOpenDoc }: { user: User, onOpenDoc: (d: Documen
   const [newIndustry, setNewIndustry] = useState('');
   const [newWebsite, setNewWebsite] = useState('');
   const [newLogoUrl, setNewLogoUrl] = useState(''); // NEW STATE
+  const [newEmployeeCount, setNewEmployeeCount] = useState<number | undefined>(undefined);
+  const [newHasRIE, setNewHasRIE] = useState<boolean | undefined>(undefined);
   const [assignedIds, setAssignedIds] = useState<string[]>([user.id]);
 
   useEffect(() => {
@@ -969,7 +971,9 @@ const CustomersView = ({ user, onOpenDoc }: { user: User, onOpenDoc: (d: Documen
       logoUrl: ensureUrl(newLogoUrl), // FIX: Auto-prefix https://
       status: 'active',
       assignedUserIds: assignedIds,
-      createdAt: new Date().toISOString()
+      createdAt: new Date().toISOString(),
+      employeeCount: newEmployeeCount,
+      hasRIE: newHasRIE
     };
 
     await customerService.addCustomer(newCustomer);
@@ -979,6 +983,8 @@ const CustomersView = ({ user, onOpenDoc }: { user: User, onOpenDoc: (d: Documen
     setNewIndustry('');
     setNewWebsite('');
     setNewLogoUrl('');
+    setNewEmployeeCount(undefined);
+    setNewHasRIE(undefined);
   };
 
   const toggleUserAssignment = (userId: string) => {
@@ -1110,9 +1116,9 @@ const CustomersView = ({ user, onOpenDoc }: { user: User, onOpenDoc: (d: Documen
              return (
               <div key={cust.id} onClick={() => setSelectedCustomer(cust)} className={`bg-white rounded-xl shadow-sm border transition-all cursor-pointer group relative p-6 hover:shadow-md ${isSelected ? 'border-richting-orange ring-1 ring-richting-orange' : 'border-gray-200'} ${cust.status === 'churned' || cust.status === 'rejected' ? 'opacity-60 grayscale' : ''}`}>
                 
-                {/* SELECTION CHECKBOX */}
+                {/* SELECTION CHECKBOX - rechtsboven */}
                 <div 
-                  className="absolute top-3 right-3 z-10 p-2"
+                  className="absolute top-4 right-4 z-10"
                   onClick={(e) => toggleCustomerSelection(cust.id, e)}
                 >
                    <div className={`w-5 h-5 rounded border flex items-center justify-center transition-colors ${isSelected ? 'bg-richting-orange border-richting-orange' : 'bg-white border-gray-300 group-hover:border-gray-400'}`}>
@@ -1120,34 +1126,40 @@ const CustomersView = ({ user, onOpenDoc }: { user: User, onOpenDoc: (d: Documen
                    </div>
                 </div>
 
+                {/* Logo linksboven en Status badge rechtsboven */}
                 <div className="flex justify-between items-start mb-4">
-                  {/* LOGO OR BLANK */}
-                  <div className="w-12 h-12 rounded-lg bg-white border border-gray-100 flex items-center justify-center overflow-hidden">
+                  {/* LOGO - linksboven */}
+                  <div className="w-14 h-14 rounded-lg bg-white border border-gray-100 flex items-center justify-center overflow-hidden flex-shrink-0">
                     {logoSrc ? (
-                        <img src={logoSrc} alt={cust.name} className="w-10 h-10 object-contain" />
+                        <img src={logoSrc} alt={cust.name} className="w-full h-full object-contain p-1" />
                     ) : (
                         <div className="w-full h-full bg-gray-50"></div>
                     )}
                   </div>
-                  <span className={`px-2 py-1 rounded-full text-xs font-bold uppercase ${cust.status === 'active' ? 'bg-green-100 text-green-700' : cust.status === 'prospect' ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-600'}`}>
-                    {getStatusLabel(cust.status)}
-                  </span>
-                </div>
-                <h3 className="text-lg font-bold text-slate-900 mb-1 group-hover:text-richting-orange">{cust.name}</h3>
-                <p className="text-sm text-gray-500 mb-6">{cust.industry || 'Geen branche opgegeven'}</p>
-                
-                <div className="border-t border-gray-100 pt-4 flex items-center justify-between">
-                  <div className="flex -space-x-2">
-                    {/* Show avatars of assigned users with safety check */}
-                    {allUsers.filter(u => assignedUsers.includes(u.id)).slice(0, 3).map(u => (
-                      <img key={u.id} src={u.avatarUrl} alt={u.name} className="w-8 h-8 rounded-full border-2 border-white bg-gray-200" title={u.name} />
-                    ))}
-                    {assignedUsers.length > 3 && (
-                      <div className="w-8 h-8 rounded-full border-2 border-white bg-gray-100 flex items-center justify-center text-xs font-bold text-gray-500">+{assignedUsers.length - 3}</div>
-                    )}
+                  
+                  {/* STATUS BADGE - rechtsboven (onder checkbox) */}
+                  <div className="flex flex-col items-end gap-2">
+                    <span className={`px-2.5 py-1 rounded text-xs font-bold uppercase ${cust.status === 'active' ? 'bg-green-100 text-green-700' : cust.status === 'prospect' ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-600'}`}>
+                      {getStatusLabel(cust.status)}
+                    </span>
                   </div>
-                  <span className="text-xs text-gray-400">Bekijk Dossier →</span>
                 </div>
+
+                {/* Bedrijfsnaam */}
+                <h3 className="text-lg font-bold text-slate-900 mb-2 group-hover:text-richting-orange">{cust.name}</h3>
+                
+                {/* Aantal medewerkers */}
+                {cust.employeeCount && (
+                  <p className="text-sm text-gray-600 mb-2">
+                    {cust.employeeCount.toLocaleString('nl-NL')} medewerkers
+                  </p>
+                )}
+                
+                {/* Extra info zoals "Geen RIE" */}
+                {cust.hasRIE === false && (
+                  <p className="text-xs text-gray-500 mb-3">X Geen RIE</p>
+                )}
+                
               </div>
             );
           })}
@@ -1207,6 +1219,31 @@ const CustomersView = ({ user, onOpenDoc }: { user: User, onOpenDoc: (d: Documen
                     onChange={e => setNewLogoUrl(e.target.value)}
                   />
                   <p className="text-xs text-gray-500 mt-1">Vul hier een link in als het automatische logo niet werkt.</p>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Aantal Medewerkers (Optioneel)</label>
+                  <input 
+                    type="number" 
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-richting-orange focus:border-richting-orange"
+                    placeholder="Bijv. 20000"
+                    value={newEmployeeCount || ''}
+                    onChange={e => setNewEmployeeCount(e.target.value ? parseInt(e.target.value) : undefined)}
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">RIE Status</label>
+                  <select
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-richting-orange focus:border-richting-orange bg-white"
+                    value={newHasRIE === undefined ? '' : newHasRIE ? 'true' : 'false'}
+                    onChange={e => setNewHasRIE(e.target.value === '' ? undefined : e.target.value === 'true')}
+                  >
+                    <option value="">Niet opgegeven</option>
+                    <option value="true">Heeft RIE</option>
+                    <option value="false">Geen RIE</option>
+                  </select>
+                </div>
               </div>
               
               <div>
