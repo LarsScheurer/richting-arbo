@@ -32,6 +32,17 @@ export interface Location {
   name: string; // e.g. "Hoofdkantoor"
   address: string;
   city: string;
+  richtingLocatieId?: string; // ID van de dichtstbijzijnde Richting locatie
+  richtingLocatieNaam?: string; // Naam van de dichtstbijzijnde Richting locatie
+}
+
+export interface RichtingLocatie {
+  id: string; // RichtingLocatieID
+  vestiging: string; // Vestiging naam
+  regio: string; // Regio (Noord, Oost, West, Zuid West, Zuid Oost, Midden)
+  volledigAdres: string; // Volledig Adres
+  latitude: number; // Opgeslagen Coordinaat Richting (latitude)
+  longitude: number; // Opgeslagen Coordinaat Richting (longitude)
 }
 
 export interface Customer {

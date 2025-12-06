@@ -27,7 +27,7 @@ import {
   where,
   addDoc
 } from 'firebase/firestore';
-import { DocumentSource, User, UserRole, DocType, Customer, BackupData, Location, ContactPerson, OrganisatieProfiel } from '../types';
+import { DocumentSource, User, UserRole, DocType, Customer, BackupData, Location, ContactPerson, OrganisatieProfiel, RichtingLocatie } from '../types';
 
 // --- STAP 1: CONFIGURATIE ---
 const firebaseConfig = {
@@ -346,6 +346,121 @@ export const customerService = {
       return { id: snapshot.docs[0].id, ...snapshot.docs[0].data() } as OrganisatieProfiel;
     } catch (e) {
       console.error("Error fetching organisatie profiel:", e);
+      return null;
+    }
+  },
+
+  saveOrganisatieProfiel: async (customerId: string, profielData: any): Promise<void> => {
+    try {
+      const profielId = `profiel_${Date.now()}`;
+      const profiel: OrganisatieProfiel = {
+        id: profielId,
+        customerId,
+        analyseDatum: new Date().toISOString(),
+        ...profielData
+      };
+      await setDoc(doc(db, 'organisatieProfielen', profielId), cleanData(profiel));
+    } catch (e) {
+      console.error("Error saving organisatie profiel:", e);
+      throw e;
+    }
+  }
+};
+
+// --- RICHTING LOCATIES SERVICE ---
+export const richtingLocatiesService = {
+  // Haal alle Richting locaties op
+  getAllLocaties: async (): Promise<RichtingLocatie[]> => {
+    try {
+      const snapshot = await getDocs(collection(db, 'richtingLocaties'));
+      return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as RichtingLocatie));
+    } catch (e) {
+      console.error("Error fetching richting locaties:", e);
+      return [];
+    }
+  },
+
+  // Seed de Richting locaties data (eenmalig uitvoeren)
+  seedLocaties: async (): Promise<void> => {
+    const locaties: Omit<RichtingLocatie, 'id'>[] = [
+      { vestiging: 'Groningen', regio: 'Noord', volledigAdres: 'Van Ketwich Verschuurlaan 98, 9721 SW Groningen, Nederland', latitude: 53.1926921, longitude: 6.5689307 },
+      { vestiging: 'Amersfoort', regio: 'West', volledigAdres: 'Ruimtevaart 24, 3824 MX Amersfoort, Nederland', latitude: 52.1957367, longitude: 5.3982116 },
+      { vestiging: 'Zwolle', regio: 'Oost', volledigAdres: 'Hanzelaan 198, 8017 JG Zwolle', latitude: 52.5037589, longitude: 6.0871051 },
+      { vestiging: 'Breda', regio: 'Zuid West', volledigAdres: 'Bijster 11, 4817 HZ Breda, Nederland', latitude: 51.58312129999999, longitude: 4.8044974 },
+      { vestiging: 'Waalre', regio: 'Zuid Oost', volledigAdres: 'Burgemeester Mollaan 90, 5582 CK Waalre', latitude: 51.40121449999999, longitude: 5.4777508 },
+      { vestiging: 'Venlo', regio: 'Zuid Oost', volledigAdres: 'Noorderpoort 9, 5916 PJ Venlo', latitude: 51.3927543, longitude: 6.1747741 },
+      { vestiging: 'Zoetermeer', regio: 'Zuid West', volledigAdres: 'Boerhaavelaan 40, 2713 H Zoetermeer', latitude: 52.0487212, longitude: 4.4770099 },
+      { vestiging: 'Urmond', regio: 'Zuid Oost', volledigAdres: 'Mauritslaan 49, 6129 EL Urmond', latitude: 50.98915539999999, longitude: 5.778275499999999 },
+      { vestiging: 'Nijmegen', regio: 'Zuid Oost', volledigAdres: 'Kerkenbos 1077b, 6546 BB Nijmegen', latitude: 51.8254254, longitude: 5.7774944 },
+      { vestiging: 'Nieuwegein', regio: 'West', volledigAdres: 'Nevelgaarde 20, 3436 ZZ Nieuwegein', latitude: 52.02700489999999, longitude: 5.0654463 },
+      { vestiging: 'Lelystad', regio: 'Oost', volledigAdres: 'Plaats 9, 8224 AB Lelystad', latitude: 52.5190434, longitude: 5.4853216 },
+      { vestiging: 'Leeuwarden', regio: 'Noord', volledigAdres: 'James Wattstraat 4, 8912 AR Leeuwarden', latitude: 53.192288, longitude: 5.7708977 },
+      { vestiging: 'Heerhugowaard', regio: 'West', volledigAdres: 'Stationsplein 57, 1703 WE Heerhugowaard', latitude: 52.6690345, longitude: 4.822707900000001 },
+      { vestiging: 'Goes', regio: 'Zuid West', volledigAdres: 'Stationspark 45, 4462 DZ Goes', latitude: 51.4965371, longitude: 3.8928287 },
+      { vestiging: 'Enschede', regio: 'Oost', volledigAdres: 'Wethouder Beversstraat 185, 7543 BK Enschede', latitude: 52.20672010000001, longitude: 6.891583 },
+      { vestiging: 'Emmen', regio: 'Noord', volledigAdres: 'Hoenderkamp 20, 7812 VZ Emmen', latitude: 52.7720902, longitude: 6.8983212 },
+      { vestiging: 'Den Bosch', regio: 'Zuid Oost', volledigAdres: 'Werfpad 6, 5212 VJ Den Bosch', latitude: 51.6966, longitude: 5.3015019 },
+      { vestiging: 'Capelle aan den Ijssel', regio: 'Zuid West', volledigAdres: 'Rivium Quadrant 241, 2909 LC Capelle aan den IJssel', latitude: 51.9143589, longitude: 4.5407378 },
+      { vestiging: 'Badhoevedorp', regio: 'West', volledigAdres: 'Prins Mauritslaan 1, 1171 LP Badhoevedorp', latitude: 52.34155639999999, longitude: 4.7654893 },
+      { vestiging: 'Assen', regio: 'Noord', volledigAdres: 'Balkendwarsweg 5, 9405 PT Assen', latitude: 52.9954845, longitude: 6.5206287 },
+      { vestiging: 'Arnhem', regio: 'Oost', volledigAdres: 'Delta 1-F, 6825 ML Arnhem', latitude: 51.9786827, longitude: 5.9747155 },
+      { vestiging: 'Apeldoorn', regio: 'Oost', volledigAdres: 'Beatrijsgaarde 1, 7329 BK Apeldoorn, Nederland', latitude: 52.1925101, longitude: 6.001603500000001 },
+      { vestiging: 'Almere', regio: 'Midden', volledigAdres: 'Koninginneweg 1, 1312 AW Almere, Nederland', latitude: 52.374984, longitude: 5.2078947 }
+    ];
+
+    const ids = [
+      '36d500ec', 'a54776c5', '586b4230', 'f83336ac', 'c4ce4a2c', 'e16692e4', '6e95b809', '00389e7c',
+      'b2768a20', 'eda76f60', '9ec6aaff', '3a207f68', 'ba33d36b', 'cc13044f', '270118f5', '42b42612',
+      '298ebb42', '1c5c23ae', '7cf9f89f', 'b744ef62', '81fd7dd6', '6f1e4b76', '215b3f92'
+    ];
+
+    try {
+      for (let i = 0; i < locaties.length; i++) {
+        await setDoc(doc(db, 'richtingLocaties', ids[i]), {
+          id: ids[i],
+          ...locaties[i]
+        });
+      }
+      console.log(`✅ Seeded ${locaties.length} Richting locaties`);
+    } catch (e) {
+      console.error("Error seeding richting locaties:", e);
+      throw e;
+    }
+  },
+
+  // Vind de dichtstbijzijnde Richting locatie op basis van coördinaten (Haversine formule)
+  findNearestLocatie: async (latitude: number, longitude: number): Promise<RichtingLocatie | null> => {
+    try {
+      const allLocaties = await richtingLocatiesService.getAllLocaties();
+      if (allLocaties.length === 0) return null;
+
+      // Haversine formule om afstand te berekenen
+      const calculateDistance = (lat1: number, lon1: number, lat2: number, lon2: number): number => {
+        const R = 6371; // Radius of the Earth in km
+        const dLat = (lat2 - lat1) * Math.PI / 180;
+        const dLon = (lon2 - lon1) * Math.PI / 180;
+        const a = 
+          Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+          Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+          Math.sin(dLon / 2) * Math.sin(dLon / 2);
+        const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+        return R * c; // Distance in km
+      };
+
+      let nearest: RichtingLocatie | null = null;
+      let minDistance = Infinity;
+
+      for (const locatie of allLocaties) {
+        const distance = calculateDistance(latitude, longitude, locatie.latitude, locatie.longitude);
+        if (distance < minDistance) {
+          minDistance = distance;
+          nearest = locatie;
+        }
+      }
+
+      return nearest;
+    } catch (e) {
+      console.error("Error finding nearest richting locatie:", e);
       return null;
     }
   }

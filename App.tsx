@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { User, DocumentSource, KNOWLEDGE_STRUCTURE, DocType, GeminiAnalysisResult, ChatMessage, Customer, Location, UserRole, ContactPerson, OrganisatieProfiel, Risico, Proces, Functie } from './types';
-import { authService, dbService, customerService, promptService, Prompt } from './services/firebase';
+import { authService, dbService, customerService, promptService, richtingLocatiesService, Prompt, RichtingLocatie } from './services/firebase';
 import { doc, updateDoc } from 'firebase/firestore';
 import { db } from './services/firebase';
 import { Layout, RichtingLogo } from './components/Layout';
@@ -327,6 +327,8 @@ const CustomerDetailView = ({
   const [isAnalyzingCultuur, setIsAnalyzingCultuur] = useState(false);
   const [organisatieAnalyseResultaat, setOrganisatieAnalyseResultaat] = useState<string | null>(null);
   const [cultuurAnalyseResultaat, setCultuurAnalyseResultaat] = useState<string | null>(null);
+  const [analyseStap, setAnalyseStap] = useState(0); // 0 = niet gestart, 1-12 = huidige stap
+  const [cultuurAnalyseStap, setCultuurAnalyseStap] = useState(0); // 0 = niet gestart, 1-12 = huidige stap
   
   // New Location Form
   const [locName, setLocName] = useState('');
@@ -357,6 +359,11 @@ const CustomerDetailView = ({
 
   const handleAddLocation = async () => {
     if (!locName || !locAddress) return;
+    
+    // Try to get coordinates from address (using a simple geocoding approach)
+    // For now, we'll add the location and try to find nearest Richting location based on city
+    // In the future, we can integrate a geocoding service to get exact coordinates
+    
     const newLoc: Location = {
       id: `loc_${Date.now()}`,
       customerId: customer.id,
@@ -364,6 +371,25 @@ const CustomerDetailView = ({
       address: locAddress,
       city: locCity
     };
+    
+    // Try to find nearest Richting location based on city name
+    // This is a fallback - ideally we'd use coordinates
+    try {
+      const allRichtingLocaties = await richtingLocatiesService.getAllLocaties();
+      // Simple city name matching as fallback
+      const matchingLocatie = allRichtingLocaties.find(rl => 
+        rl.vestiging.toLowerCase().includes(locCity.toLowerCase()) ||
+        locCity.toLowerCase().includes(rl.vestiging.toLowerCase())
+      );
+      
+      if (matchingLocatie) {
+        newLoc.richtingLocatieId = matchingLocatie.id;
+        newLoc.richtingLocatieNaam = matchingLocatie.vestiging;
+      }
+    } catch (e) {
+      console.error("Error finding nearest Richting location:", e);
+    }
+    
     await customerService.addLocation(newLoc);
     setLocations(prev => [...prev, newLoc]);
     setIsAddingLoc(false);
@@ -525,20 +551,28 @@ const CustomerDetailView = ({
             <div className="space-y-3">
                {locations.length === 0 && !isAddingLoc && <p className="text-sm text-gray-400 italic">Nog geen locaties toegevoegd.</p>}
                {locations.map(loc => (
-                 <div key={loc.id} className="bg-white p-4 rounded-lg border border-gray-100 shadow-sm flex justify-between items-center group">
-                    <div>
-                       <p className="font-bold text-slate-800 text-sm">{loc.name}</p>
-                       <p className="text-xs text-gray-500">{loc.address}, {loc.city}</p>
+                 <div key={loc.id} className="bg-white p-4 rounded-lg border border-gray-100 shadow-sm group">
+                    <div className="flex justify-between items-start mb-2">
+                       <div className="flex-1">
+                          <p className="font-bold text-slate-800 text-sm">{loc.name}</p>
+                          <p className="text-xs text-gray-500">{loc.address}, {loc.city}</p>
+                          {loc.richtingLocatieNaam && (
+                            <div className="mt-2 flex items-center gap-1">
+                              <span className="text-xs text-richting-orange font-medium">📍 Dichtstbijzijnde Richting:</span>
+                              <span className="text-xs text-slate-700 font-semibold">{loc.richtingLocatieNaam}</span>
+                            </div>
+                          )}
+                       </div>
+                       <a 
+                         href={getGoogleMapsLink(loc)} 
+                         target="_blank" 
+                         rel="noreferrer"
+                         className="text-gray-400 hover:text-richting-orange p-2 flex-shrink-0"
+                         title="Bekijk op kaart"
+                       >
+                         <MapIcon />
+                       </a>
                     </div>
-                    <a 
-                      href={getGoogleMapsLink(loc)} 
-                      target="_blank" 
-                      rel="noreferrer"
-                      className="text-gray-400 hover:text-richting-orange p-2"
-                      title="Bekijk op kaart"
-                    >
-                      <MapIcon />
-                    </a>
                  </div>
                ))}
             </div>
@@ -598,17 +632,96 @@ const CustomerDetailView = ({
                onClick={async () => {
                  setIsAnalyzingOrganisatie(true);
                  setOrganisatieAnalyseResultaat(null);
+                 setAnalyseStap(0);
+                 
+                 // Start progress steps
+                 const stappen = [
+                   "Inleiding en Branche-identificatie",
+                   "SBI-codes en Bedrijfsinformatie",
+                   "Arbocatalogus en Branche-RI&E",
+                   "Risicocategorieën en Kwantificering",
+                   "Primaire Processen in de Branche",
+                   "Werkzaamheden en Functies",
+                   "Verzuim in de Branche",
+                   "Beroepsziekten in de Branche",
+                   "Gevaarlijke Stoffen en Risico's",
+                   "Risicomatrices",
+                   "Vooruitblik en Speerpunten",
+                   "Stappenplan voor een Preventieve Samenwerking"
+                 ];
+                 
+                 // Simulate progress through steps
+                 const stepInterval = setInterval(() => {
+                   setAnalyseStap(prev => {
+                     if (prev >= 12) {
+                       clearInterval(stepInterval);
+                       return 12;
+                     }
+                     return prev + 1;
+                   });
+                 }, 2000); // Update every 2 seconds
+                 
                  try {
-                   const result = await analyzeOrganisatieBranche(
-                     customer.name,
-                     customer.industry,
-                     customer.website,
-                     customer.employeeCount
-                   );
+                   // Use Firebase Function to get active prompt from Firestore
+                   const functionsUrl = 'https://europe-west4-richting-sales-d764a.cloudfunctions.net/analyseBranche';
+                   const response = await fetch(functionsUrl, {
+                     method: 'POST',
+                     headers: {
+                       'Content-Type': 'application/json',
+                     },
+                     body: JSON.stringify({ 
+                       organisatieNaam: customer.name,
+                       website: customer.website || ''
+                     })
+                   });
+
+                   if (!response.ok) {
+                     throw new Error(`HTTP error! status: ${response.status}`);
+                   }
+
+                   const data = await response.json();
+                   
+                   // The Firebase Function returns JSON with the full analysis
+                   // Convert to markdown format for display
+                   let result = '';
+                   if (data.inleiding) result += `# ${data.inleiding}\n\n`;
+                   if (data.brancheIdentificatie) result += `## Hoofdstuk 1: Introductie en Branche-identificatie\n\n${data.brancheIdentificatie}\n\n`;
+                   if (data.sbiCodes) result += `## Hoofdstuk 2: SBI-codes en Bedrijfsinformatie\n\n${data.sbiCodes}\n\n`;
+                   if (data.arbocatalogus) result += `## Hoofdstuk 3: Arbocatalogus en Branche-RI&E\n\n${data.arbocatalogus}\n\n`;
+                   if (data.risicocategorieen) result += `## Hoofdstuk 4: Risicocategorieën en Kwantificering\n\n${data.risicocategorieen}\n\n`;
+                   if (data.primairProcessen) result += `## Hoofdstuk 5: Primaire Processen in de Branche\n\n${data.primairProcessen}\n\n`;
+                   if (data.werkzaamheden) result += `## Hoofdstuk 6: Werkzaamheden en Functies\n\n${data.werkzaamheden}\n\n`;
+                   if (data.verzuim) result += `## Hoofdstuk 7: Verzuim in de Branche\n\n${data.verzuim}\n\n`;
+                   if (data.beroepsziekten) result += `## Hoofdstuk 8: Beroepsziekten in de Branche\n\n${data.beroepsziekten}\n\n`;
+                   if (data.gevaarlijkeStoffen) result += `## Hoofdstuk 9: Gevaarlijke Stoffen en Risico's\n\n${data.gevaarlijkeStoffen}\n\n`;
+                   if (data.risicomatrices) result += `## Hoofdstuk 10: Risicomatrices\n\n${data.risicomatrices}\n\n`;
+                   if (data.vooruitblik) result += `## Hoofdstuk 11: Vooruitblik en Speerpunten\n\n${data.vooruitblik}\n\n`;
+                   if (data.stappenplan) result += `## Hoofdstuk 12: Stappenplan voor een Preventieve Samenwerking\n\n${data.stappenplan}\n\n`;
+                   
+                   // If no structured data, use raw response
+                   if (!result && typeof data === 'string') {
+                     result = data;
+                   } else if (!result) {
+                     result = JSON.stringify(data, null, 2);
+                   }
+                   
+                   clearInterval(stepInterval);
+                   setAnalyseStap(12); // Mark all steps as complete
                    setOrganisatieAnalyseResultaat(result);
+                   
+                   // Save to Firestore as OrganisatieProfiel
+                   if (data && customer.id) {
+                     try {
+                       await customerService.saveOrganisatieProfiel(customer.id, data);
+                     } catch (saveError) {
+                       console.error("Error saving organisatie profiel:", saveError);
+                     }
+                   }
                  } catch (error) {
+                   clearInterval(stepInterval);
                    console.error("Organisatie analyse error:", error);
                    setOrganisatieAnalyseResultaat("Fout bij analyse. Probeer het opnieuw.");
+                   setAnalyseStap(0);
                  } finally {
                    setIsAnalyzingOrganisatie(false);
                  }
@@ -616,18 +729,112 @@ const CustomerDetailView = ({
                disabled={isAnalyzingOrganisatie}
                className="bg-richting-orange text-white px-4 py-2 rounded-lg text-sm font-bold hover:bg-orange-600 disabled:opacity-50 transition-colors flex items-center gap-2"
              >
-               {isAnalyzingOrganisatie ? "⏳ Analyseren..." : "📊 Branche Analyse"}
+               {isAnalyzingOrganisatie ? "⏳ Analyseren..." : "📊 Publiek Organisatie Profiel"}
              </button>
              <button
                onClick={async () => {
                  setIsAnalyzingCultuur(true);
                  setCultuurAnalyseResultaat(null);
+                 setCultuurAnalyseStap(0);
+                 
+                 // Start progress steps for cultuur analyse
+                 const cultuurStappen = [
+                   "CultuurDNA Analyse",
+                   "Cultuurvolwassenheid Assessment",
+                   "Performance & Engagement Analyse",
+                   "Gaps & Barrières Identificatie",
+                   "Opportuniteiten & Thema's",
+                   "Gedragingen Analyse",
+                   "Interventies & Actieplan",
+                   "Risico's Psychosociale Arbeidsbelasting",
+                   "Aanbevelingen Formulering",
+                   "Prioriteitsmatrix Opstellen",
+                   "Rapportage Genereren",
+                   "Resultaat Opslaan"
+                 ];
+                 
+                 // Simulate progress through steps
+                 const stepInterval = setInterval(() => {
+                   setCultuurAnalyseStap(prev => {
+                     if (prev >= 12) {
+                       clearInterval(stepInterval);
+                       return 12;
+                     }
+                     return prev + 1;
+                   });
+                 }, 2000); // Update every 2 seconds
+                 
                  try {
-                   const result = await analyzeCultuur(customer.name, customer.industry, docs);
+                   // Use Firebase Function to get active prompt from Firestore
+                   const functionsUrl = 'https://europe-west4-richting-sales-d764a.cloudfunctions.net/analyseCultuurTest';
+                   const response = await fetch(functionsUrl, {
+                     method: 'POST',
+                     headers: {
+                       'Content-Type': 'application/json',
+                     },
+                     body: JSON.stringify({ 
+                       organisatieNaam: customer.name,
+                       website: customer.website || ''
+                     })
+                   });
+
+                   if (!response.ok) {
+                     throw new Error(`HTTP error! status: ${response.status}`);
+                   }
+
+                   const data = await response.json();
+                   
+                   // The Firebase Function returns JSON with the full cultuur profiel
+                   // Use volledigRapport if available, otherwise format the JSON
+                   let result = '';
+                   if (data.volledigRapport) {
+                     result = data.volledigRapport;
+                   } else {
+                     // Format as markdown
+                     result = `# Cultuur Analyse Resultaat\n\n`;
+                     if (data.scores) {
+                       result += `## The Executive Pulse\n\n`;
+                       result += `- Cultuurvolwassenheid: ${data.scores.cultuurvolwassenheid || 0}/100\n`;
+                       result += `- Groeidynamiek: ${data.scores.groeidynamiekScore || 0}/100\n`;
+                       result += `- Cultuurfit: ${data.scores.cultuurfit || 0}/100\n`;
+                       result += `- Cultuursterkte: ${data.scores.cultuursterkte || 'gemiddeld'}\n`;
+                       result += `- Dynamiek Type: ${data.scores.dynamiekType || 'organisch_groeiend'}\n\n`;
+                     }
+                     if (data.dna) {
+                       result += `## Het Cultuur DNA\n\n`;
+                       result += `- Dominant Type: ${data.dna.dominantType || 'hybride'}\n`;
+                       if (data.dna.kernwaarden && data.dna.kernwaarden.length > 0) {
+                         result += `\n### Kernwaarden:\n`;
+                         data.dna.kernwaarden.forEach((kw: any) => {
+                           result += `- ${kw.waarde}: ${kw.score || 0}/100 (${kw.status || 'neutraal'})\n`;
+                         });
+                       }
+                     }
+                     if (data.gaps && data.gaps.length > 0) {
+                       result += `\n## Gaps & Barrières\n\n`;
+                       data.gaps.forEach((gap: any) => {
+                         result += `- ${gap.dimensie}: Gap van ${gap.gap || 0} (Urgentie: ${gap.urgentie || 'gemiddeld'})\n`;
+                       });
+                     }
+                     if (data.interventies && data.interventies.length > 0) {
+                       result += `\n## Interventies & Actieplan\n\n`;
+                       data.interventies.forEach((int: any) => {
+                         result += `- ${int.naam} (${int.type || 'strategisch'}): ${int.beschrijving || ''}\n`;
+                       });
+                     }
+                   }
+                   
+                   clearInterval(stepInterval);
+                   setCultuurAnalyseStap(12); // Mark all steps as complete
                    setCultuurAnalyseResultaat(result);
+                   
+                   // Save to Firestore as CultuurProfiel (if we have a collection for this)
+                   // Note: This might need to be added to customerService if not already present
                  } catch (error) {
+                   clearInterval(stepInterval);
                    console.error("Cultuur analyse error:", error);
                    setCultuurAnalyseResultaat("Fout bij analyse. Probeer het opnieuw.");
+                   setCultuurAnalyseStap(0);
                  } finally {
                    setIsAnalyzingCultuur(false);
                  }
@@ -640,11 +847,159 @@ const CustomerDetailView = ({
            </div>
          </div>
 
+         {/* Analyse Progress Steps */}
+         {isAnalyzingOrganisatie && (
+           <div className="bg-white border border-gray-200 rounded-lg p-6 mb-4">
+             <h4 className="font-bold text-slate-900 mb-4 flex items-center gap-2">
+               <span className="animate-spin">⏳</span> Analyse in uitvoering...
+             </h4>
+             <div className="space-y-3">
+               {[
+                 "Inleiding en Branche-identificatie",
+                 "SBI-codes en Bedrijfsinformatie",
+                 "Arbocatalogus en Branche-RI&E",
+                 "Risicocategorieën en Kwantificering",
+                 "Primaire Processen in de Branche",
+                 "Werkzaamheden en Functies",
+                 "Verzuim in de Branche",
+                 "Beroepsziekten in de Branche",
+                 "Gevaarlijke Stoffen en Risico's",
+                 "Risicomatrices",
+                 "Vooruitblik en Speerpunten",
+                 "Stappenplan voor een Preventieve Samenwerking"
+               ].map((stap, index) => {
+                 const stapNummer = index + 1;
+                 const isVoltooid = analyseStap > stapNummer;
+                 const isHuidige = analyseStap === stapNummer;
+                 
+                 return (
+                   <div 
+                     key={index}
+                     className={`flex items-center gap-3 p-2 rounded transition-colors ${
+                       isHuidige ? 'bg-orange-50 border border-orange-200' : ''
+                     }`}
+                   >
+                     <div className={`w-6 h-6 rounded-full flex items-center justify-center flex-shrink-0 ${
+                       isVoltooid 
+                         ? 'bg-green-500 text-white' 
+                         : isHuidige 
+                         ? 'bg-richting-orange text-white animate-pulse' 
+                         : 'bg-gray-200 text-gray-400'
+                     }`}>
+                       {isVoltooid ? (
+                         <span className="text-xs font-bold">✓</span>
+                       ) : isHuidige ? (
+                         <span className="text-xs font-bold animate-spin">⟳</span>
+                       ) : (
+                         <span className="text-xs font-bold">{stapNummer}</span>
+                       )}
+                     </div>
+                     <span className={`text-sm ${
+                       isVoltooid 
+                         ? 'text-gray-600 line-through' 
+                         : isHuidige 
+                         ? 'text-richting-orange font-bold' 
+                         : 'text-gray-400'
+                     }`}>
+                       {stapNummer}. {stap}
+                     </span>
+                   </div>
+                 );
+               })}
+             </div>
+             <div className="mt-4 pt-4 border-t border-gray-200">
+               <div className="flex items-center justify-between text-xs text-gray-500">
+                 <span>Voortgang: {analyseStap} van 12 stappen</span>
+                 <div className="w-32 bg-gray-200 rounded-full h-2">
+                   <div 
+                     className="bg-richting-orange h-2 rounded-full transition-all duration-300"
+                     style={{ width: `${(analyseStap / 12) * 100}%` }}
+                   ></div>
+                 </div>
+               </div>
+             </div>
+           </div>
+         )}
+
          {/* Analyse Resultaten */}
          {organisatieAnalyseResultaat && (
            <div className="bg-orange-50 border border-orange-200 rounded-lg p-4 mb-4">
-             <h4 className="font-bold text-richting-orange mb-2 flex items-center gap-2">📊 Branche Analyse Resultaat</h4>
+             <h4 className="font-bold text-richting-orange mb-2 flex items-center gap-2">📊 Publiek Organisatie Profiel Resultaat</h4>
              <p className="text-sm text-gray-700 whitespace-pre-wrap">{organisatieAnalyseResultaat}</p>
+           </div>
+         )}
+
+         {/* Cultuur Analyse Progress Steps */}
+         {isAnalyzingCultuur && (
+           <div className="bg-white border border-gray-200 rounded-lg p-6 mb-4">
+             <h4 className="font-bold text-slate-900 mb-4 flex items-center gap-2">
+               <span className="animate-spin">⏳</span> Cultuur Analyse in uitvoering...
+             </h4>
+             <div className="space-y-3">
+               {[
+                 "CultuurDNA Analyse",
+                 "Cultuurvolwassenheid Assessment",
+                 "Performance & Engagement Analyse",
+                 "Gaps & Barrières Identificatie",
+                 "Opportuniteiten & Thema's",
+                 "Gedragingen Analyse",
+                 "Interventies & Actieplan",
+                 "Risico's Psychosociale Arbeidsbelasting",
+                 "Aanbevelingen Formulering",
+                 "Prioriteitsmatrix Opstellen",
+                 "Rapportage Genereren",
+                 "Resultaat Opslaan"
+               ].map((stap, index) => {
+                 const stapNummer = index + 1;
+                 const isVoltooid = cultuurAnalyseStap > stapNummer;
+                 const isHuidige = cultuurAnalyseStap === stapNummer;
+                 
+                 return (
+                   <div 
+                     key={index}
+                     className={`flex items-center gap-3 p-2 rounded transition-colors ${
+                       isHuidige ? 'bg-slate-50 border border-slate-200' : ''
+                     }`}
+                   >
+                     <div className={`w-6 h-6 rounded-full flex items-center justify-center flex-shrink-0 ${
+                       isVoltooid 
+                         ? 'bg-green-500 text-white' 
+                         : isHuidige 
+                         ? 'bg-slate-700 text-white animate-pulse' 
+                         : 'bg-gray-200 text-gray-400'
+                     }`}>
+                       {isVoltooid ? (
+                         <span className="text-xs font-bold">✓</span>
+                       ) : isHuidige ? (
+                         <span className="text-xs font-bold animate-spin">⟳</span>
+                       ) : (
+                         <span className="text-xs font-bold">{stapNummer}</span>
+                       )}
+                     </div>
+                     <span className={`text-sm ${
+                       isVoltooid 
+                         ? 'text-gray-600 line-through' 
+                         : isHuidige 
+                         ? 'text-slate-700 font-bold' 
+                         : 'text-gray-400'
+                     }`}>
+                       {stapNummer}. {stap}
+                     </span>
+                   </div>
+                 );
+               })}
+             </div>
+             <div className="mt-4 pt-4 border-t border-gray-200">
+               <div className="flex items-center justify-between text-xs text-gray-500">
+                 <span>Voortgang: {cultuurAnalyseStap} van 12 stappen</span>
+                 <div className="w-32 bg-gray-200 rounded-full h-2">
+                   <div 
+                     className="bg-slate-700 h-2 rounded-full transition-all duration-300"
+                     style={{ width: `${(cultuurAnalyseStap / 12) * 100}%` }}
+                   ></div>
+                 </div>
+               </div>
+             </div>
            </div>
          )}
 
@@ -657,14 +1012,117 @@ const CustomerDetailView = ({
 
          {organisatieProfiel && (
            <>
-             <p className="text-sm text-gray-500 mb-4">Analyse datum: {new Date(organisatieProfiel.analyseDatum).toLocaleDateString('nl-NL')}</p>
-           
+             {/* Header met Organisatie Info */}
+             <div className="bg-gradient-to-r from-richting-orange to-orange-600 rounded-xl shadow-lg p-6 mb-6 text-white">
+               <div className="flex items-center justify-between mb-4">
+                 <div>
+                   <h3 className="text-2xl font-bold mb-1">Publiek Organisatie Profiel</h3>
+                   <p className="text-orange-100 text-sm">{organisatieProfiel.organisatieNaam || customer.name}</p>
+                 </div>
+                 <div className="text-right">
+                   <p className="text-xs text-orange-100 mb-1">Analyse Datum</p>
+                   <p className="text-sm font-bold">{new Date(organisatieProfiel.analyseDatum).toLocaleDateString('nl-NL')}</p>
+                 </div>
+               </div>
+               <div className="grid grid-cols-3 gap-4 mt-4 pt-4 border-t border-orange-400/30">
+                 <div>
+                   <p className="text-xs text-orange-100 mb-1">Risico's</p>
+                   <p className="text-2xl font-bold">{organisatieProfiel.risicos?.length || 0}</p>
+                 </div>
+                 <div>
+                   <p className="text-xs text-orange-100 mb-1">Processen</p>
+                   <p className="text-2xl font-bold">{organisatieProfiel.processen?.length || 0}</p>
+                 </div>
+                 <div>
+                   <p className="text-xs text-orange-100 mb-1">Functies</p>
+                   <p className="text-2xl font-bold">{organisatieProfiel.functies?.length || 0}</p>
+                 </div>
+               </div>
+             </div>
+
+           {/* Risico's Overzicht */}
+           {organisatieProfiel.risicos && organisatieProfiel.risicos.length > 0 && (
+             <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 mb-6">
+               <h4 className="text-xl font-bold text-slate-900 mb-4 flex items-center gap-2">
+                 <span className="text-2xl">⚠️</span> Risico Overzicht
+               </h4>
+               <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+                 {['psychisch', 'fysiek', 'overige'].map(cat => {
+                   const risicosInCat = organisatieProfiel.risicos.filter(r => r.categorie === cat);
+                   const gemiddeldeRisico = risicosInCat.length > 0
+                     ? risicosInCat.reduce((sum, r) => {
+                         const kans = convertKansToFineKinney(r.kans);
+                         const effect = convertEffectToFineKinney(r.effect);
+                         return sum + (kans * effect);
+                       }, 0) / risicosInCat.length
+                     : 0;
+                   const categorieLabels = { 'psychisch': 'Psychisch', 'fysiek': 'Fysiek', 'overige': 'Overige' };
+                   const categorieColors = {
+                     'psychisch': 'bg-purple-100 text-purple-700 border-purple-200',
+                     'fysiek': 'bg-blue-100 text-blue-700 border-blue-200',
+                     'overige': 'bg-gray-100 text-gray-700 border-gray-200'
+                   };
+                   return (
+                     <div key={cat} className={`p-4 rounded-lg border-2 ${categorieColors[cat as keyof typeof categorieColors]}`}>
+                       <p className="text-sm font-bold mb-2">{categorieLabels[cat as keyof typeof categorieLabels]}</p>
+                       <p className="text-3xl font-bold mb-1">{risicosInCat.length}</p>
+                       <p className="text-xs opacity-75">Gemiddeld risico: {Math.round(gemiddeldeRisico)}</p>
+                     </div>
+                   );
+                 })}
+               </div>
+               <div className="space-y-2 max-h-64 overflow-y-auto">
+                 {organisatieProfiel.risicos
+                   .map(risico => {
+                     const kans = convertKansToFineKinney(risico.kans);
+                     const effect = convertEffectToFineKinney(risico.effect);
+                     const risicogetal = kans * effect;
+                     const prioriteitNiveau = risicogetal >= 400 ? 1 : risicogetal >= 200 ? 2 : risicogetal >= 100 ? 3 : risicogetal >= 50 ? 4 : 5;
+                     return { risico, kans, effect, risicogetal, prioriteitNiveau };
+                   })
+                   .sort((a, b) => b.risicogetal - a.risicogetal)
+                   .slice(0, 10)
+                   .map(({ risico, kans, effect, risicogetal, prioriteitNiveau }) => {
+                     const prioriteitLabels = ['Zeer hoog', 'Hoog', 'Middel', 'Laag', 'Zeer laag'];
+                     const prioriteitColors = ['bg-red-100 text-red-700 border-red-300', 'bg-orange-100 text-orange-700 border-orange-300', 'bg-yellow-100 text-yellow-700 border-yellow-300', 'bg-blue-100 text-blue-700 border-blue-300', 'bg-green-100 text-green-700 border-green-300'];
+                     const categorieColors = {
+                       'psychisch': 'bg-purple-50 text-purple-700',
+                       'fysiek': 'bg-blue-50 text-blue-700',
+                       'overige': 'bg-gray-50 text-gray-700'
+                     };
+                     return (
+                       <div key={risico.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg border border-gray-200 hover:border-richting-orange transition-colors">
+                         <div className="flex-1">
+                           <div className="flex items-center gap-2 mb-1">
+                             <span className={`px-2 py-0.5 rounded text-xs font-medium ${categorieColors[risico.categorie] || categorieColors.overige}`}>
+                               {risico.categorie}
+                             </span>
+                             <span className="text-sm font-bold text-slate-900">{risico.naam}</span>
+                           </div>
+                           <div className="flex items-center gap-4 text-xs text-gray-500">
+                             <span>Kans: {kans}</span>
+                             <span>Effect: {effect}</span>
+                             <span className="font-bold text-slate-700">Risico: {risicogetal}</span>
+                           </div>
+                         </div>
+                         <span className={`px-3 py-1 rounded text-xs font-bold border ${prioriteitColors[prioriteitNiveau - 1]}`}>
+                           {prioriteitNiveau}. {prioriteitLabels[prioriteitNiveau - 1]}
+                         </span>
+                       </div>
+                     );
+                   })}
+               </div>
+             </div>
+           )}
+
            {/* Processen en Functies Overzicht */}
            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
              {/* Processen */}
-             <div className="bg-white border border-gray-200 rounded-lg p-4">
-              <h4 className="font-bold text-slate-900 mb-3">Processen ({organisatieProfiel.processen?.length || 0})</h4>
-              <div className="space-y-2 max-h-96 overflow-y-auto">
+             <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-6">
+              <h4 className="text-xl font-bold text-slate-900 mb-4 flex items-center gap-2">
+                <span className="text-2xl">⚙️</span> Processen ({organisatieProfiel.processen?.length || 0})
+              </h4>
+              <div className="space-y-3 max-h-96 overflow-y-auto">
                 {organisatieProfiel.processen
                   ?.map(proces => {
                     const risicos = proces.risicos || [];
@@ -693,17 +1151,22 @@ const CustomerDetailView = ({
                       <div 
                         key={proces.id} 
                         onClick={() => setSelectedProces(proces)}
-                        className="p-3 border border-gray-200 rounded cursor-pointer hover:border-richting-orange transition-colors"
+                        className="p-4 bg-gradient-to-r from-gray-50 to-white border-2 border-gray-200 rounded-lg cursor-pointer hover:border-richting-orange hover:shadow-md transition-all group"
                       >
-                        <div className="flex justify-between items-start">
+                        <div className="flex justify-between items-start mb-2">
                           <div className="flex-1">
-                            <h5 className="font-bold text-sm text-slate-900">{proces.naam}</h5>
-                            <p className="text-xs text-gray-500 mt-1 line-clamp-2">{proces.beschrijving}</p>
-                            <p className="text-xs text-gray-400 mt-1">{risicos.length} risico's</p>
+                            <h5 className="font-bold text-base text-slate-900 group-hover:text-richting-orange transition-colors">{proces.naam}</h5>
+                            <p className="text-sm text-gray-600 mt-1 line-clamp-2">{proces.beschrijving}</p>
                           </div>
-                          <span className={`px-2 py-1 rounded text-xs font-bold ${prioriteitColors[prioriteitNiveau - 1]}`}>
+                          <span className={`px-3 py-1.5 rounded-lg text-xs font-bold border-2 ml-3 flex-shrink-0 ${prioriteitColors[prioriteitNiveau - 1]}`}>
                             {prioriteitNiveau}. {prioriteitLabels[prioriteitNiveau - 1]}
                           </span>
+                        </div>
+                        <div className="flex items-center gap-4 mt-3 pt-3 border-t border-gray-200">
+                          <span className="text-xs text-gray-500 flex items-center gap-1">
+                            <span className="text-richting-orange">⚠️</span> {risicos.length} risico{risicos.length !== 1 ? "'s" : ""}
+                          </span>
+                          <span className="text-xs text-richting-orange font-medium group-hover:underline">Details bekijken →</span>
                         </div>
                       </div>
                     );
@@ -712,9 +1175,11 @@ const CustomerDetailView = ({
              </div>
 
              {/* Functies */}
-             <div className="bg-white border border-gray-200 rounded-lg p-4">
-              <h4 className="font-bold text-slate-900 mb-3">Functies ({organisatieProfiel.functies?.length || 0})</h4>
-              <div className="space-y-2 max-h-96 overflow-y-auto">
+             <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-6">
+              <h4 className="text-xl font-bold text-slate-900 mb-4 flex items-center gap-2">
+                <span className="text-2xl">👥</span> Functies ({organisatieProfiel.functies?.length || 0})
+              </h4>
+              <div className="space-y-3 max-h-96 overflow-y-auto">
                 {organisatieProfiel.functies
                   ?.map(functie => {
                     const risicos = functie.risicos || [];
@@ -743,22 +1208,44 @@ const CustomerDetailView = ({
                       <div 
                         key={functie.id} 
                         onClick={() => setSelectedFunctie(functie)}
-                        className="p-3 border border-gray-200 rounded cursor-pointer hover:border-richting-orange transition-colors"
+                        className="p-4 bg-gradient-to-r from-gray-50 to-white border-2 border-gray-200 rounded-lg cursor-pointer hover:border-richting-orange hover:shadow-md transition-all group"
                       >
-                        <div className="flex justify-between items-start">
+                        <div className="flex justify-between items-start mb-2">
                           <div className="flex-1">
-                            <h5 className="font-bold text-sm text-slate-900">{functie.naam}</h5>
-                            <p className="text-xs text-gray-500 mt-1 line-clamp-2">{functie.beschrijving}</p>
-                            {functie.fysiek !== undefined && functie.psychisch !== undefined && (
-                              <p className="text-xs text-gray-400 mt-1">
-                                Fysiek: {functie.fysiek}/5, Psychisch: {functie.psychisch}/5
-                              </p>
-                            )}
-                            <p className="text-xs text-gray-400 mt-1">{risicos.length} risico's</p>
+                            <h5 className="font-bold text-base text-slate-900 group-hover:text-richting-orange transition-colors">{functie.naam}</h5>
+                            <p className="text-sm text-gray-600 mt-1 line-clamp-2">{functie.beschrijving}</p>
                           </div>
-                          <span className={`px-2 py-1 rounded text-xs font-bold ${prioriteitColors[prioriteitNiveau - 1]}`}>
+                          <span className={`px-3 py-1.5 rounded-lg text-xs font-bold border-2 ml-3 flex-shrink-0 ${prioriteitColors[prioriteitNiveau - 1]}`}>
                             {prioriteitNiveau}. {prioriteitLabels[prioriteitNiveau - 1]}
                           </span>
+                        </div>
+                        {functie.fysiek !== undefined && functie.psychisch !== undefined && (
+                          <div className="flex items-center gap-4 mt-2 mb-2">
+                            <div className="flex items-center gap-1">
+                              <span className="text-xs text-gray-500">💪 Fysiek:</span>
+                              <div className="flex gap-0.5">
+                                {[1, 2, 3, 4, 5].map(i => (
+                                  <div key={i} className={`w-3 h-3 rounded-full ${i <= functie.fysiek ? 'bg-blue-500' : 'bg-gray-200'}`} />
+                                ))}
+                              </div>
+                              <span className="text-xs font-bold text-blue-600 ml-1">{functie.fysiek}/5</span>
+                            </div>
+                            <div className="flex items-center gap-1">
+                              <span className="text-xs text-gray-500">🧠 Psychisch:</span>
+                              <div className="flex gap-0.5">
+                                {[1, 2, 3, 4, 5].map(i => (
+                                  <div key={i} className={`w-3 h-3 rounded-full ${i <= functie.psychisch ? 'bg-purple-500' : 'bg-gray-200'}`} />
+                                ))}
+                              </div>
+                              <span className="text-xs font-bold text-purple-600 ml-1">{functie.psychisch}/5</span>
+                            </div>
+                          </div>
+                        )}
+                        <div className="flex items-center gap-4 mt-3 pt-3 border-t border-gray-200">
+                          <span className="text-xs text-gray-500 flex items-center gap-1">
+                            <span className="text-richting-orange">⚠️</span> {risicos.length} risico{risicos.length !== 1 ? "'s" : ""}
+                          </span>
+                          <span className="text-xs text-richting-orange font-medium group-hover:underline">Details bekijken →</span>
                         </div>
                       </div>
                     );
@@ -767,17 +1254,33 @@ const CustomerDetailView = ({
              </div>
            </div>
 
+           {/* Volledig Rapport */}
+           {organisatieProfiel.volledigRapport && (
+             <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 mb-6">
+               <h4 className="text-xl font-bold text-slate-900 mb-4 flex items-center gap-2">
+                 <span className="text-2xl">📄</span> Volledig Rapport
+               </h4>
+               <div className="prose max-w-none">
+                 <div className="bg-gray-50 rounded-lg p-6 border border-gray-200 max-h-96 overflow-y-auto">
+                   <div className="text-sm text-gray-700 whitespace-pre-wrap font-sans">
+                     {organisatieProfiel.volledigRapport}
+                   </div>
+                 </div>
+               </div>
+             </div>
+           )}
+
            {/* Detail Modal voor Proces of Functie */}
            {(selectedProces || selectedFunctie) && (
-             <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
-               <div className="bg-white rounded-xl shadow-2xl w-full max-w-4xl max-h-[90vh] overflow-hidden">
-                 <div className="bg-gray-50 px-6 py-4 border-b border-gray-200 flex justify-between items-center">
-                   <h3 className="font-bold text-slate-800">
-                     {selectedProces ? `Proces: ${selectedProces.naam}` : `Functie: ${selectedFunctie?.naam}`}
+             <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm animate-fade-in">
+               <div className="bg-white rounded-xl shadow-2xl w-full max-w-5xl max-h-[90vh] overflow-hidden">
+                 <div className="bg-gradient-to-r from-richting-orange to-orange-600 px-6 py-4 flex justify-between items-center">
+                   <h3 className="font-bold text-white text-lg">
+                     {selectedProces ? `⚙️ Proces: ${selectedProces.naam}` : `👥 Functie: ${selectedFunctie?.naam}`}
                    </h3>
                    <button 
                      onClick={() => { setSelectedProces(null); setSelectedFunctie(null); }}
-                     className="text-gray-400 hover:text-gray-600"
+                     className="text-white hover:text-gray-200 text-2xl font-bold w-8 h-8 flex items-center justify-center rounded-full hover:bg-white/20 transition-colors"
                    >
                      ✕
                    </button>
@@ -785,19 +1288,23 @@ const CustomerDetailView = ({
                  <div className="p-6 overflow-y-auto max-h-[calc(90vh-120px)]">
                    {selectedProces && (
                      <>
-                       <p className="text-sm text-gray-600 mb-4">{selectedProces.beschrijving}</p>
-                       <h4 className="font-bold text-slate-900 mb-3">Risico's ({selectedProces.risicos?.length || 0})</h4>
-                       <div className="overflow-x-auto">
+                       <div className="bg-blue-50 border-l-4 border-blue-500 p-4 rounded mb-6">
+                         <p className="text-sm text-gray-700 leading-relaxed">{selectedProces.beschrijving}</p>
+                       </div>
+                       <h4 className="font-bold text-slate-900 mb-4 text-lg flex items-center gap-2">
+                         <span>⚠️</span> Risico's ({selectedProces.risicos?.length || 0})
+                       </h4>
+                       <div className="overflow-x-auto border border-gray-200 rounded-lg">
                          <table className="min-w-full divide-y divide-gray-200">
-                           <thead className="bg-gray-50">
+                           <thead className="bg-gradient-to-r from-gray-100 to-gray-50">
                              <tr>
-                               <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Risico</th>
-                               <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Categorie</th>
-                               <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Blootstelling (B)</th>
-                               <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Kans (W)</th>
-                               <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Effect (E)</th>
-                               <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Risicogetal (R)</th>
-                               <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Prioriteit</th>
+                               <th className="px-4 py-3 text-left text-xs font-bold text-gray-700 uppercase">Risico</th>
+                               <th className="px-4 py-3 text-left text-xs font-bold text-gray-700 uppercase">Categorie</th>
+                               <th className="px-4 py-3 text-left text-xs font-bold text-gray-700 uppercase">Blootstelling (B)</th>
+                               <th className="px-4 py-3 text-left text-xs font-bold text-gray-700 uppercase">Kans (W)</th>
+                               <th className="px-4 py-3 text-left text-xs font-bold text-gray-700 uppercase">Effect (E)</th>
+                               <th className="px-4 py-3 text-left text-xs font-bold text-gray-700 uppercase">Risicogetal (R)</th>
+                               <th className="px-4 py-3 text-left text-xs font-bold text-gray-700 uppercase">Prioriteit</th>
                              </tr>
                            </thead>
                            <tbody className="bg-white divide-y divide-gray-200">
@@ -818,27 +1325,27 @@ const CustomerDetailView = ({
                                  if (!data) return null;
                                  const { risico, blootstelling, kans, effect, risicogetal, prioriteitNiveau } = data;
                                  const prioriteitLabels = ['Zeer hoog', 'Hoog', 'Middel', 'Laag', 'Zeer laag'];
-                                 const prioriteitColors = ['bg-red-100 text-red-700', 'bg-orange-100 text-orange-700', 'bg-yellow-100 text-yellow-700', 'bg-blue-100 text-blue-700', 'bg-green-100 text-green-700'];
+                                 const prioriteitColors = ['bg-red-100 text-red-700 border-red-300', 'bg-orange-100 text-orange-700 border-orange-300', 'bg-yellow-100 text-yellow-700 border-yellow-300', 'bg-blue-100 text-blue-700 border-blue-300', 'bg-green-100 text-green-700 border-green-300'];
                                  const categorieColors = {
-                                   'fysiek': 'bg-blue-100 text-blue-700',
-                                   'psychisch': 'bg-purple-100 text-purple-700',
-                                   'overige': 'bg-gray-100 text-gray-700'
+                                   'fysiek': 'bg-blue-50 text-blue-700',
+                                   'psychisch': 'bg-purple-50 text-purple-700',
+                                   'overige': 'bg-gray-50 text-gray-700'
                                  };
                                  
                                  return (
-                                   <tr key={data.idx}>
-                                     <td className="px-4 py-3 text-sm text-gray-900">{risico.naam}</td>
+                                   <tr key={data.idx} className="hover:bg-gray-50 transition-colors">
+                                     <td className="px-4 py-3 text-sm font-medium text-gray-900">{risico.naam}</td>
                                      <td className="px-4 py-3">
                                        <span className={`px-2 py-1 rounded text-xs font-medium ${categorieColors[risico.categorie] || categorieColors.overige}`}>
                                          {risico.categorie}
                                        </span>
                                      </td>
-                                     <td className="px-4 py-3 text-sm text-gray-900">{blootstelling}</td>
-                                     <td className="px-4 py-3 text-sm text-gray-900">{kans}</td>
-                                     <td className="px-4 py-3 text-sm text-gray-900">{effect}</td>
-                                     <td className="px-4 py-3 text-sm font-bold text-gray-900">{risicogetal}</td>
+                                     <td className="px-4 py-3 text-sm text-gray-700 font-medium">{blootstelling}</td>
+                                     <td className="px-4 py-3 text-sm text-gray-700 font-medium">{kans}</td>
+                                     <td className="px-4 py-3 text-sm text-gray-700 font-medium">{effect}</td>
+                                     <td className="px-4 py-3 text-sm font-bold text-richting-orange">{risicogetal}</td>
                                      <td className="px-4 py-3">
-                                       <span className={`px-2 py-1 rounded text-xs font-bold ${prioriteitColors[prioriteitNiveau - 1]}`}>
+                                       <span className={`px-3 py-1 rounded-lg text-xs font-bold border-2 ${prioriteitColors[prioriteitNiveau - 1]}`}>
                                          {prioriteitNiveau}. {prioriteitLabels[prioriteitNiveau - 1]}
                                        </span>
                                      </td>
@@ -846,10 +1353,10 @@ const CustomerDetailView = ({
                                  );
                                })}
                            </tbody>
-                           <tfoot className="bg-gray-50">
+                           <tfoot className="bg-gradient-to-r from-gray-100 to-gray-50">
                              <tr>
-                               <td colSpan={6} className="px-4 py-3 text-right text-sm font-bold text-gray-900">Totaal:</td>
-                               <td className="px-4 py-3 text-sm font-bold text-gray-900">
+                               <td colSpan={6} className="px-4 py-3 text-right text-sm font-bold text-gray-900">Totaal Risicogetal:</td>
+                               <td className="px-4 py-3 text-sm font-bold text-richting-orange text-lg">
                                  {selectedProces.risicos
                                    ?.map(item => {
                                      const risico = item.risico || organisatieProfiel.risicos.find(r => r.id === item.risicoId);
@@ -869,32 +1376,54 @@ const CustomerDetailView = ({
                    )}
                    {selectedFunctie && (
                      <>
-                       <p className="text-sm text-gray-600 mb-4">{selectedFunctie.beschrijving}</p>
-                       <h4 className="font-bold text-slate-900 mb-3">Functiebelasting</h4>
-                       <div className="mb-4">
-                         <div className="flex gap-4">
-                           <div>
-                             <span className="text-xs text-gray-500">Fysiek</span>
-                             <p className="text-2xl font-bold text-blue-600">{selectedFunctie.fysiek || 0}/5</p>
+                       <div className="bg-purple-50 border-l-4 border-purple-500 p-4 rounded mb-6">
+                         <p className="text-sm text-gray-700 leading-relaxed">{selectedFunctie.beschrijving}</p>
+                       </div>
+                       <h4 className="font-bold text-slate-900 mb-4 text-lg flex items-center gap-2">
+                         <span>📊</span> Functiebelasting
+                       </h4>
+                       <div className="mb-6 grid grid-cols-2 gap-4">
+                         <div className="bg-blue-50 border-2 border-blue-200 rounded-lg p-4">
+                           <span className="text-xs text-gray-600 font-medium block mb-2">💪 Fysieke Belasting</span>
+                           <div className="flex items-center gap-3">
+                             <div className="flex gap-1">
+                               {[1, 2, 3, 4, 5].map(i => (
+                                 <div key={i} className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold ${i <= (selectedFunctie.fysiek || 0) ? 'bg-blue-500 text-white' : 'bg-gray-200 text-gray-400'}`}>
+                                   {i}
+                                 </div>
+                               ))}
+                             </div>
+                             <p className="text-3xl font-bold text-blue-600">{selectedFunctie.fysiek || 0}/5</p>
                            </div>
-                           <div>
-                             <span className="text-xs text-gray-500">Psychisch</span>
-                             <p className="text-2xl font-bold text-purple-600">{selectedFunctie.psychisch || 0}/5</p>
+                         </div>
+                         <div className="bg-purple-50 border-2 border-purple-200 rounded-lg p-4">
+                           <span className="text-xs text-gray-600 font-medium block mb-2">🧠 Psychische Belasting</span>
+                           <div className="flex items-center gap-3">
+                             <div className="flex gap-1">
+                               {[1, 2, 3, 4, 5].map(i => (
+                                 <div key={i} className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold ${i <= (selectedFunctie.psychisch || 0) ? 'bg-purple-500 text-white' : 'bg-gray-200 text-gray-400'}`}>
+                                   {i}
+                                 </div>
+                               ))}
+                             </div>
+                             <p className="text-3xl font-bold text-purple-600">{selectedFunctie.psychisch || 0}/5</p>
                            </div>
                          </div>
                        </div>
-                       <h4 className="font-bold text-slate-900 mb-3">Risico's ({selectedFunctie.risicos?.length || 0})</h4>
-                       <div className="overflow-x-auto">
+                       <h4 className="font-bold text-slate-900 mb-4 text-lg flex items-center gap-2">
+                         <span>⚠️</span> Risico's ({selectedFunctie.risicos?.length || 0})
+                       </h4>
+                       <div className="overflow-x-auto border border-gray-200 rounded-lg">
                          <table className="min-w-full divide-y divide-gray-200">
-                           <thead className="bg-gray-50">
+                           <thead className="bg-gradient-to-r from-gray-100 to-gray-50">
                              <tr>
-                               <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Risico</th>
-                               <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Categorie</th>
-                               <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Blootstelling (B)</th>
-                               <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Kans (W)</th>
-                               <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Effect (E)</th>
-                               <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Risicogetal (R)</th>
-                               <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Prioriteit</th>
+                               <th className="px-4 py-3 text-left text-xs font-bold text-gray-700 uppercase">Risico</th>
+                               <th className="px-4 py-3 text-left text-xs font-bold text-gray-700 uppercase">Categorie</th>
+                               <th className="px-4 py-3 text-left text-xs font-bold text-gray-700 uppercase">Blootstelling (B)</th>
+                               <th className="px-4 py-3 text-left text-xs font-bold text-gray-700 uppercase">Kans (W)</th>
+                               <th className="px-4 py-3 text-left text-xs font-bold text-gray-700 uppercase">Effect (E)</th>
+                               <th className="px-4 py-3 text-left text-xs font-bold text-gray-700 uppercase">Risicogetal (R)</th>
+                               <th className="px-4 py-3 text-left text-xs font-bold text-gray-700 uppercase">Prioriteit</th>
                              </tr>
                            </thead>
                            <tbody className="bg-white divide-y divide-gray-200">
@@ -923,19 +1452,19 @@ const CustomerDetailView = ({
                                  };
                                  
                                  return (
-                                   <tr key={data.idx}>
-                                     <td className="px-4 py-3 text-sm text-gray-900">{risico.naam}</td>
+                                   <tr key={data.idx} className="hover:bg-gray-50 transition-colors">
+                                     <td className="px-4 py-3 text-sm font-medium text-gray-900">{risico.naam}</td>
                                      <td className="px-4 py-3">
                                        <span className={`px-2 py-1 rounded text-xs font-medium ${categorieColors[risico.categorie] || categorieColors.overige}`}>
                                          {risico.categorie}
                                        </span>
                                      </td>
-                                     <td className="px-4 py-3 text-sm text-gray-900">{blootstelling}</td>
-                                     <td className="px-4 py-3 text-sm text-gray-900">{kans}</td>
-                                     <td className="px-4 py-3 text-sm text-gray-900">{effect}</td>
-                                     <td className="px-4 py-3 text-sm font-bold text-gray-900">{risicogetal}</td>
+                                     <td className="px-4 py-3 text-sm text-gray-700 font-medium">{blootstelling}</td>
+                                     <td className="px-4 py-3 text-sm text-gray-700 font-medium">{kans}</td>
+                                     <td className="px-4 py-3 text-sm text-gray-700 font-medium">{effect}</td>
+                                     <td className="px-4 py-3 text-sm font-bold text-richting-orange">{risicogetal}</td>
                                      <td className="px-4 py-3">
-                                       <span className={`px-2 py-1 rounded text-xs font-bold ${prioriteitColors[prioriteitNiveau - 1]}`}>
+                                       <span className={`px-3 py-1 rounded-lg text-xs font-bold border-2 ${prioriteitColors[prioriteitNiveau - 1]}`}>
                                          {prioriteitNiveau}. {prioriteitLabels[prioriteitNiveau - 1]}
                                        </span>
                                      </td>
@@ -943,10 +1472,10 @@ const CustomerDetailView = ({
                                  );
                                })}
                            </tbody>
-                           <tfoot className="bg-gray-50">
+                           <tfoot className="bg-gradient-to-r from-gray-100 to-gray-50">
                              <tr>
-                               <td colSpan={6} className="px-4 py-3 text-right text-sm font-bold text-gray-900">Totaal:</td>
-                               <td className="px-4 py-3 text-sm font-bold text-gray-900">
+                               <td colSpan={6} className="px-4 py-3 text-right text-sm font-bold text-gray-900">Totaal Risicogetal:</td>
+                               <td className="px-4 py-3 text-sm font-bold text-richting-orange text-lg">
                                  {selectedFunctie.risicos
                                    ?.map(item => {
                                      const risico = item.risico || organisatieProfiel.risicos.find(r => r.id === item.risicoId);
@@ -1921,7 +2450,7 @@ const UploadView = ({ user, onUploadComplete }: { user: User, onUploadComplete: 
 
 // --- SETTINGS VIEW ---
 const SettingsView = ({ user }: { user: User }) => {
-  const [activeTab, setActiveTab] = useState<'autorisatie' | 'promptbeheer'>('autorisatie');
+  const [activeTab, setActiveTab] = useState<'autorisatie' | 'promptbeheer' | 'databeheer'>('autorisatie');
   const [users, setUsers] = useState<User[]>([]);
   const [prompts, setPrompts] = useState<Prompt[]>([]);
   const [loading, setLoading] = useState(true);
@@ -1931,17 +2460,21 @@ const SettingsView = ({ user }: { user: User }) => {
   const [promptType, setPromptType] = useState<'branche_analyse' | 'publiek_cultuur_profiel' | 'other'>('branche_analyse');
   const [showPromptEditor, setShowPromptEditor] = useState(false);
   const [uploadingFile, setUploadingFile] = useState(false);
+  const [seedingLocaties, setSeedingLocaties] = useState(false);
+  const [richtingLocaties, setRichtingLocaties] = useState<RichtingLocatie[]>([]);
 
   useEffect(() => {
     const loadData = async () => {
       setLoading(true);
       try {
-        const [usersData, promptsData] = await Promise.all([
+        const [usersData, promptsData, locatiesData] = await Promise.all([
           authService.getAllUsers(),
-          promptService.getPrompts()
+          promptService.getPrompts(),
+          richtingLocatiesService.getAllLocaties()
         ]);
         setUsers(usersData);
         setPrompts(promptsData);
+        setRichtingLocaties(locatiesData);
       } catch (error) {
         console.error("Error loading settings data:", error);
       } finally {
@@ -1950,6 +2483,29 @@ const SettingsView = ({ user }: { user: User }) => {
     };
     loadData();
   }, []);
+
+  const handleSeedRichtingLocaties = async () => {
+    if (!window.confirm('Weet je zeker dat je de Richting locaties wilt seeden? Dit voegt 23 locaties toe aan Firestore.')) {
+      return;
+    }
+
+    setSeedingLocaties(true);
+    try {
+      await richtingLocatiesService.seedLocaties();
+      const updatedLocaties = await richtingLocatiesService.getAllLocaties();
+      setRichtingLocaties(updatedLocaties);
+      alert(`✅ Succesvol! ${updatedLocaties.length} Richting locaties zijn toegevoegd.`);
+    } catch (error: any) {
+      console.error("Error seeding richting locaties:", error);
+      if (error.message?.includes('already exists') || error.code === 'already-exists') {
+        alert('⚠️ Locaties bestaan al. Als je opnieuw wilt seeden, verwijder eerst de collection in Firebase Console.');
+      } else {
+        alert(`❌ Fout bij seeden: ${error.message || 'Onbekende fout'}`);
+      }
+    } finally {
+      setSeedingLocaties(false);
+    }
+  };
 
   const handleRoleChange = async (userId: string, newRole: UserRole) => {
     try {
@@ -2087,6 +2643,16 @@ const SettingsView = ({ user }: { user: User }) => {
           }`}
         >
           📝 Promptbeheer
+        </button>
+        <button
+          onClick={() => setActiveTab('databeheer')}
+          className={`px-6 py-3 text-sm font-medium transition-colors ${
+            activeTab === 'databeheer'
+              ? 'text-richting-orange border-b-2 border-richting-orange'
+              : 'text-gray-500 hover:text-gray-700'
+          }`}
+        >
+          💾 Data Beheer
         </button>
       </div>
 
@@ -2334,6 +2900,64 @@ const SettingsView = ({ user }: { user: User }) => {
               )}
             </div>
           )}
+        </div>
+      )}
+
+      {/* Data Beheer Tab */}
+      {activeTab === 'databeheer' && (
+        <div className="space-y-6">
+          <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+            <h3 className="text-lg font-bold text-slate-900 mb-4">Richting Locaties</h3>
+            <div className="space-y-4">
+              <div className="flex items-center justify-between p-4 bg-gray-50 rounded-lg border border-gray-200">
+                <div>
+                  <p className="font-bold text-slate-900">Richting Locaties Database</p>
+                  <p className="text-sm text-gray-500 mt-1">
+                    {richtingLocaties.length > 0 
+                      ? `${richtingLocaties.length} locaties geladen` 
+                      : 'Nog geen locaties in database'}
+                  </p>
+                </div>
+                <button
+                  onClick={handleSeedRichtingLocaties}
+                  disabled={seedingLocaties}
+                  className="bg-richting-orange text-white px-4 py-2 rounded-lg font-bold hover:bg-orange-600 disabled:opacity-50 transition-colors flex items-center gap-2"
+                >
+                  {seedingLocaties ? (
+                    <>
+                      <span className="animate-spin">⏳</span> Seeden...
+                    </>
+                  ) : (
+                    <>
+                      🌱 Seed Richting Locaties
+                    </>
+                  )}
+                </button>
+              </div>
+
+              {richtingLocaties.length > 0 && (
+                <div className="mt-6">
+                  <h4 className="font-bold text-slate-900 mb-3">Geladen Locaties ({richtingLocaties.length})</h4>
+                  <div className="max-h-96 overflow-y-auto space-y-2">
+                    {richtingLocaties.map(loc => (
+                      <div key={loc.id} className="p-3 bg-gray-50 rounded border border-gray-200">
+                        <div className="flex items-start justify-between">
+                          <div className="flex-1">
+                            <p className="font-bold text-slate-900 text-sm">{loc.vestiging}</p>
+                            <p className="text-xs text-gray-600 mt-1">{loc.regio}</p>
+                            <p className="text-xs text-gray-500 mt-1">{loc.volledigAdres}</p>
+                          </div>
+                          <div className="text-xs text-gray-400 ml-4">
+                            {loc.latitude.toFixed(4)}, {loc.longitude.toFixed(4)}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
         </div>
       )}
     </div>
