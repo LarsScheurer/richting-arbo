@@ -323,6 +323,8 @@ const CustomerDetailView = ({
   const [isAddingLoc, setIsAddingLoc] = useState(false);
   const [isAddingContact, setIsAddingContact] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [editingLocation, setEditingLocation] = useState<Location | null>(null);
+  const [deletingLocation, setDeletingLocation] = useState<Location | null>(null);
   const [isAnalyzingOrganisatie, setIsAnalyzingOrganisatie] = useState(false);
   const [isAnalyzingCultuur, setIsAnalyzingCultuur] = useState(false);
   const [organisatieAnalyseResultaat, setOrganisatieAnalyseResultaat] = useState<string | null>(null);
@@ -334,6 +336,10 @@ const CustomerDetailView = ({
   const [locName, setLocName] = useState('');
   const [locAddress, setLocAddress] = useState('');
   const [locCity, setLocCity] = useState('');
+  const [locEmployeeCount, setLocEmployeeCount] = useState<number | undefined>(undefined);
+  
+  // Edit Location Form
+  const [editLocEmployeeCount, setEditLocEmployeeCount] = useState<number | undefined>(undefined);
 
   // New Contact Form
   const [contactFirst, setContactFirst] = useState('');
@@ -369,7 +375,8 @@ const CustomerDetailView = ({
       customerId: customer.id,
       name: locName,
       address: locAddress,
-      city: locCity
+      city: locCity,
+      employeeCount: locEmployeeCount
     };
     
     // Try to find nearest Richting location based on city name
@@ -393,7 +400,39 @@ const CustomerDetailView = ({
     await customerService.addLocation(newLoc);
     setLocations(prev => [...prev, newLoc]);
     setIsAddingLoc(false);
-    setLocName(''); setLocAddress(''); setLocCity('');
+    setLocName(''); setLocAddress(''); setLocCity(''); setLocEmployeeCount(undefined);
+  };
+
+  const handleEditLocation = (location: Location) => {
+    setEditingLocation(location);
+    setEditLocEmployeeCount(location.employeeCount);
+  };
+
+  const handleSaveLocationEdit = async () => {
+    if (!editingLocation) return;
+    
+    const updatedLoc: Location = {
+      ...editingLocation,
+      employeeCount: editLocEmployeeCount
+    };
+    
+    await customerService.addLocation(updatedLoc); // setDoc werkt ook voor updates
+    setLocations(prev => prev.map(loc => loc.id === editingLocation.id ? updatedLoc : loc));
+    setEditingLocation(null);
+    setEditLocEmployeeCount(undefined);
+  };
+
+  const handleDeleteLocation = async () => {
+    if (!deletingLocation) return;
+    
+    try {
+      await customerService.deleteLocation(deletingLocation.id);
+      setLocations(prev => prev.filter(loc => loc.id !== deletingLocation.id));
+      setDeletingLocation(null);
+    } catch (error) {
+      console.error("Error deleting location:", error);
+      alert("Kon locatie niet verwijderen. Probeer het opnieuw.");
+    }
   };
 
   const handleAddContact = async () => {
@@ -540,9 +579,20 @@ const CustomerDetailView = ({
                     <input type="text" placeholder="Naam (bijv. Hoofdkantoor)" className="w-full text-sm border p-2 rounded" value={locName} onChange={e => setLocName(e.target.value)} />
                     <input type="text" placeholder="Adres" className="w-full text-sm border p-2 rounded" value={locAddress} onChange={e => setLocAddress(e.target.value)} />
                     <input type="text" placeholder="Stad" className="w-full text-sm border p-2 rounded" value={locCity} onChange={e => setLocCity(e.target.value)} />
+                    <input 
+                      type="number" 
+                      placeholder="Aantal medewerkers (optioneel)" 
+                      className="w-full text-sm border p-2 rounded" 
+                      value={locEmployeeCount || ''} 
+                      onChange={e => setLocEmployeeCount(e.target.value ? parseInt(e.target.value) : undefined)}
+                      min="0"
+                    />
                     <div className="flex gap-2 pt-2">
                        <button onClick={handleAddLocation} className="bg-richting-orange text-white text-xs px-3 py-2 rounded font-bold">Opslaan</button>
-                       <button onClick={() => setIsAddingLoc(false)} className="text-gray-500 text-xs px-3 py-2">Annuleren</button>
+                       <button onClick={() => {
+                         setIsAddingLoc(false);
+                         setLocName(''); setLocAddress(''); setLocCity(''); setLocEmployeeCount(undefined);
+                       }} className="text-gray-500 text-xs px-3 py-2">Annuleren</button>
                     </div>
                  </div>
               </div>
@@ -551,11 +601,21 @@ const CustomerDetailView = ({
             <div className="space-y-3">
                {locations.length === 0 && !isAddingLoc && <p className="text-sm text-gray-400 italic">Nog geen locaties toegevoegd.</p>}
                {locations.map(loc => (
-                 <div key={loc.id} className="bg-white p-4 rounded-lg border border-gray-100 shadow-sm group">
+                 <div key={loc.id} className="bg-white p-4 rounded-lg border border-gray-100 shadow-sm group hover:border-richting-orange transition-colors">
                     <div className="flex justify-between items-start mb-2">
                        <div className="flex-1">
                           <p className="font-bold text-slate-800 text-sm">{loc.name}</p>
                           <p className="text-xs text-gray-500">{loc.address}, {loc.city}</p>
+                          {loc.employeeCount ? (
+                            <div className="mt-1 flex items-center gap-1">
+                              <span className="text-xs text-gray-600">👥</span>
+                              <span className="text-xs font-semibold text-richting-orange">{loc.employeeCount.toLocaleString('nl-NL')} medewerkers</span>
+                            </div>
+                          ) : (
+                            <div className="mt-1 flex items-center gap-1">
+                              <span className="text-xs text-gray-400 italic">👥 Geen medewerkersaantal opgegeven</span>
+                            </div>
+                          )}
                           {loc.richtingLocatieNaam && (
                             <div className="mt-2 flex items-center gap-1">
                               <span className="text-xs text-richting-orange font-medium">📍 Dichtstbijzijnde Richting:</span>
@@ -563,19 +623,164 @@ const CustomerDetailView = ({
                             </div>
                           )}
                        </div>
-                       <a 
-                         href={getGoogleMapsLink(loc)} 
-                         target="_blank" 
-                         rel="noreferrer"
-                         className="text-gray-400 hover:text-richting-orange p-2 flex-shrink-0"
-                         title="Bekijk op kaart"
-                       >
-                         <MapIcon />
-                       </a>
+                       <div className="flex items-center gap-1">
+                         <button
+                           onClick={() => handleEditLocation(loc)}
+                           className="text-gray-400 hover:text-richting-orange p-2 flex-shrink-0 transition-colors"
+                           title="Bewerk locatie"
+                         >
+                           <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                           </svg>
+                         </button>
+                         <button
+                           onClick={() => setDeletingLocation(loc)}
+                           className="text-gray-400 hover:text-red-500 p-2 flex-shrink-0 transition-colors"
+                           title="Verwijder locatie"
+                         >
+                           <TrashIcon />
+                         </button>
+                         <a 
+                           href={getGoogleMapsLink(loc)} 
+                           target="_blank" 
+                           rel="noreferrer"
+                           className="text-gray-400 hover:text-richting-orange p-2 flex-shrink-0 transition-colors"
+                           title="Bekijk op kaart"
+                         >
+                           <MapIcon />
+                         </a>
+                       </div>
                     </div>
                  </div>
                ))}
             </div>
+            
+            {/* Edit Location Modal */}
+            {editingLocation && (
+              <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm" onClick={() => {
+                setEditingLocation(null);
+                setEditLocEmployeeCount(undefined);
+              }}>
+                <div className="bg-white rounded-xl shadow-2xl w-full max-w-md" onClick={e => e.stopPropagation()}>
+                  <div className="p-6">
+                    <div className="flex justify-between items-center mb-4">
+                      <h3 className="text-lg font-bold text-slate-900">Bewerk Locatie</h3>
+                      <button
+                        onClick={() => {
+                          setEditingLocation(null);
+                          setEditLocEmployeeCount(undefined);
+                        }}
+                        className="text-gray-400 hover:text-gray-600"
+                      >
+                        <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                        </svg>
+                      </button>
+                    </div>
+                    
+                    <div className="space-y-4">
+                      <div>
+                        <p className="font-bold text-slate-800 text-sm mb-1">{editingLocation.name}</p>
+                        <p className="text-xs text-gray-500 mb-4">{editingLocation.address}, {editingLocation.city}</p>
+                      </div>
+                      
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-2">
+                          Aantal medewerkers
+                        </label>
+                        <input
+                          type="number"
+                          placeholder="Voer aantal medewerkers in"
+                          className="w-full text-sm border border-gray-300 rounded-lg px-3 py-2 focus:ring-richting-orange focus:border-richting-orange"
+                          value={editLocEmployeeCount || ''}
+                          onChange={e => setEditLocEmployeeCount(e.target.value ? parseInt(e.target.value) : undefined)}
+                          min="0"
+                        />
+                        {editingLocation.employeeCount && (
+                          <p className="text-xs text-gray-500 mt-1">
+                            Huidig: {editingLocation.employeeCount.toLocaleString('nl-NL')} medewerkers
+                          </p>
+                        )}
+                      </div>
+                      
+                      <div className="flex gap-3 pt-4">
+                        <button
+                          onClick={handleSaveLocationEdit}
+                          className="flex-1 bg-richting-orange text-white px-4 py-2 rounded-lg font-bold hover:bg-orange-600 transition-colors"
+                        >
+                          Opslaan
+                        </button>
+                        <button
+                          onClick={() => {
+                            setEditingLocation(null);
+                            setEditLocEmployeeCount(undefined);
+                          }}
+                          className="flex-1 bg-gray-200 text-gray-700 px-4 py-2 rounded-lg font-bold hover:bg-gray-300 transition-colors"
+                        >
+                          Annuleren
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Delete Location Confirmation Modal */}
+            {deletingLocation && (
+              <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm" onClick={() => setDeletingLocation(null)}>
+                <div className="bg-white rounded-xl shadow-2xl w-full max-w-md" onClick={e => e.stopPropagation()}>
+                  <div className="p-6">
+                    <div className="flex justify-between items-center mb-4">
+                      <h3 className="text-lg font-bold text-slate-900">Locatie Verwijderen</h3>
+                      <button
+                        onClick={() => setDeletingLocation(null)}
+                        className="text-gray-400 hover:text-gray-600"
+                      >
+                        <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                        </svg>
+                      </button>
+                    </div>
+                    
+                    <div className="space-y-4">
+                      <div>
+                        <p className="text-sm text-gray-700 mb-2">
+                          Weet je zeker dat je deze locatie wilt verwijderen?
+                        </p>
+                        <div className="bg-gray-50 p-3 rounded-lg border border-gray-200">
+                          <p className="font-bold text-slate-800 text-sm">{deletingLocation.name}</p>
+                          <p className="text-xs text-gray-500">{deletingLocation.address}, {deletingLocation.city}</p>
+                          {deletingLocation.employeeCount && (
+                            <p className="text-xs text-gray-500 mt-1">
+                              {deletingLocation.employeeCount.toLocaleString('nl-NL')} medewerkers
+                            </p>
+                          )}
+                        </div>
+                        <p className="text-xs text-red-600 mt-2 font-medium">
+                          ⚠️ Deze actie kan niet ongedaan worden gemaakt.
+                        </p>
+                      </div>
+                      
+                      <div className="flex gap-3 pt-4">
+                        <button
+                          onClick={handleDeleteLocation}
+                          className="flex-1 bg-red-500 text-white px-4 py-2 rounded-lg font-bold hover:bg-red-600 transition-colors"
+                        >
+                          Verwijderen
+                        </button>
+                        <button
+                          onClick={() => setDeletingLocation(null)}
+                          className="flex-1 bg-gray-200 text-gray-700 px-4 py-2 rounded-lg font-bold hover:bg-gray-300 transition-colors"
+                        >
+                          Annuleren
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
          </div>
 
          {/* CONTACTS SECTION */}
@@ -713,6 +918,55 @@ const CustomerDetailView = ({
                    if (data && customer.id) {
                      try {
                        await customerService.saveOrganisatieProfiel(customer.id, data);
+                       
+                       // Import locaties from OrganisatieProfiel if available
+                       if (data.locaties && Array.isArray(data.locaties)) {
+                         const allRichtingLocaties = await richtingLocatiesService.getAllLocaties();
+                         const currentLocations = await customerService.getLocations(customer.id);
+                         
+                         for (const profielLocatie of data.locaties) {
+                           // Check if location already exists
+                           const existingLoc = currentLocations.find(loc => 
+                             loc.name === profielLocatie.naam && 
+                             loc.address === profielLocatie.adres
+                           );
+                           
+                           if (!existingLoc) {
+                             // Find nearest Richting location
+                             let richtingLocatieId: string | undefined;
+                             let richtingLocatieNaam: string | undefined;
+                             
+                             if (profielLocatie.richtingLocatie) {
+                               const matchingRichting = allRichtingLocaties.find(rl => 
+                                 rl.vestiging === profielLocatie.richtingLocatie
+                               );
+                               if (matchingRichting) {
+                                 richtingLocatieId = matchingRichting.id;
+                                 richtingLocatieNaam = matchingRichting.vestiging;
+                               }
+                             }
+                             
+                             const newLoc: Location = {
+                               id: `loc_${Date.now()}_${Math.random()}`,
+                               customerId: customer.id,
+                               name: profielLocatie.naam || 'Locatie',
+                               address: profielLocatie.adres || '',
+                               city: profielLocatie.stad || '',
+                               employeeCount: profielLocatie.aantalMedewerkers || undefined,
+                               richtingLocatieId,
+                               richtingLocatieNaam
+                             };
+                             
+                             await customerService.addLocation(newLoc);
+                             setLocations(prev => [...prev, newLoc]);
+                           } else if (profielLocatie.aantalMedewerkers && !existingLoc.employeeCount) {
+                             // Update existing location with employee count if missing
+                             const updatedLoc = { ...existingLoc, employeeCount: profielLocatie.aantalMedewerkers };
+                             await customerService.addLocation(updatedLoc);
+                             setLocations(prev => prev.map(loc => loc.id === existingLoc.id ? updatedLoc : loc));
+                           }
+                         }
+                       }
                      } catch (saveError) {
                        console.error("Error saving organisatie profiel:", saveError);
                      }
@@ -2457,6 +2711,7 @@ const RegioView = ({ user }: { user: User }) => {
   const [selectedRegio, setSelectedRegio] = useState<string | null>(null);
   const [selectedVestiging, setSelectedVestiging] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [isLinkingLocations, setIsLinkingLocations] = useState(false);
 
   useEffect(() => {
     const loadData = async () => {
@@ -2475,7 +2730,41 @@ const RegioView = ({ user }: { user: User }) => {
           const locs = await customerService.getLocations(customer.id);
           allCustomerLocations.push(...locs);
         }
-        setAllLocations(allCustomerLocations);
+        
+        // Koppel locaties zonder richtingLocatieId aan dichtstbijzijnde Richting locatie
+        const updatedLocations: Location[] = [];
+        for (const loc of allCustomerLocations) {
+          if (!loc.richtingLocatieId && loc.city) {
+            // Zoek op basis van stad naam
+            const matchingLocatie = locaties.find(rl => {
+              const cityLower = loc.city.toLowerCase();
+              const vestigingLower = rl.vestiging.toLowerCase();
+              const adresLower = rl.volledigAdres.toLowerCase();
+              
+              return cityLower.includes(vestigingLower) || 
+                     vestigingLower.includes(cityLower) ||
+                     adresLower.includes(cityLower) ||
+                     cityLower.includes(adresLower.split(',')[0].toLowerCase());
+            });
+            
+            if (matchingLocatie) {
+              const updatedLoc: Location = {
+                ...loc,
+                richtingLocatieId: matchingLocatie.id,
+                richtingLocatieNaam: matchingLocatie.vestiging
+              };
+              // Update in Firestore
+              await customerService.addLocation(updatedLoc);
+              updatedLocations.push(updatedLoc);
+            } else {
+              updatedLocations.push(loc);
+            }
+          } else {
+            updatedLocations.push(loc);
+          }
+        }
+        
+        setAllLocations(updatedLocations);
       } catch (error) {
         console.error("Error loading regio data:", error);
       } finally {
@@ -2498,8 +2787,9 @@ const RegioView = ({ user }: { user: User }) => {
   }, [richtingLocaties]);
 
   // Match klanten met regio's/vestigingen op basis van hun locaties
+  // Nu met locatie-specifieke medewerkersaantallen
   const klantenPerRegio = useMemo(() => {
-    const grouped: Record<string, { customer: Customer, vestiging: string }[]> = {};
+    const grouped: Record<string, { customer: Customer, vestiging: string, location: Location }[]> = {};
     
     allLocations.forEach(loc => {
       if (loc.richtingLocatieId) {
@@ -2512,7 +2802,8 @@ const RegioView = ({ user }: { user: User }) => {
             }
             grouped[richtingLoc.regio].push({
               customer,
-              vestiging: richtingLoc.vestiging
+              vestiging: richtingLoc.vestiging,
+              location: loc
             });
           }
         }
@@ -2522,19 +2813,32 @@ const RegioView = ({ user }: { user: User }) => {
     return grouped;
   }, [allLocations, richtingLocaties, customers]);
 
-  // Bereken medewerkers per regio
+  // Bereken medewerkers per regio (gebruik locatie-specifieke aantallen)
   const medewerkersPerRegio = useMemo(() => {
     const totals: Record<string, number> = {};
     Object.keys(klantenPerRegio).forEach(regio => {
       const total = klantenPerRegio[regio].reduce((sum, item) => {
-        return sum + (item.customer.employeeCount || 0);
+        // Gebruik locatie-specifiek aantal als beschikbaar
+        if (item.location.employeeCount !== undefined && item.location.employeeCount !== null) {
+          return sum + item.location.employeeCount;
+        }
+        // Als locatie geen aantal heeft, gebruik klant totaal (maar alleen één keer per klant per regio)
+        // Om dubbele telling te voorkomen, tellen we alleen de eerste locatie van een klant in een regio
+        const isFirstLocationForCustomer = klantenPerRegio[regio].findIndex(
+          i => i.customer.id === item.customer.id && i.location.id === item.location.id
+        ) === klantenPerRegio[regio].findIndex(i => i.customer.id === item.customer.id);
+        
+        if (isFirstLocationForCustomer) {
+          return sum + (item.customer.employeeCount || 0);
+        }
+        return sum;
       }, 0);
       totals[regio] = total;
     });
     return totals;
   }, [klantenPerRegio]);
 
-  // Bereken medewerkers per vestiging
+  // Bereken medewerkers per vestiging (gebruik locatie-specifieke aantallen)
   const medewerkersPerVestiging = useMemo(() => {
     if (!selectedRegio) return {};
     const totals: Record<string, number> = {};
@@ -2542,19 +2846,44 @@ const RegioView = ({ user }: { user: User }) => {
       if (!totals[item.vestiging]) {
         totals[item.vestiging] = 0;
       }
-      totals[item.vestiging] += (item.customer.employeeCount || 0);
+      
+      // Gebruik locatie-specifiek aantal als beschikbaar
+      if (item.location.employeeCount !== undefined && item.location.employeeCount !== null) {
+        totals[item.vestiging] += item.location.employeeCount;
+      } else {
+        // Als locatie geen aantal heeft, gebruik klant totaal (maar alleen één keer per klant per vestiging)
+        const isFirstLocationForCustomer = klantenPerRegio[selectedRegio]?.findIndex(
+          i => i.customer.id === item.customer.id && 
+               i.vestiging === item.vestiging && 
+               i.location.id === item.location.id
+        ) === klantenPerRegio[selectedRegio]?.findIndex(
+          i => i.customer.id === item.customer.id && i.vestiging === item.vestiging
+        );
+        
+        if (isFirstLocationForCustomer) {
+          totals[item.vestiging] += (item.customer.employeeCount || 0);
+        }
+      }
     });
     return totals;
   }, [selectedRegio, klantenPerRegio]);
 
   // Filter klanten op basis van geselecteerde regio/vestiging
+  // Unieke klanten (om duplicaten te voorkomen)
   const filteredKlanten = useMemo(() => {
     if (!selectedRegio) return [];
     let filtered = klantenPerRegio[selectedRegio] || [];
     if (selectedVestiging) {
       filtered = filtered.filter(item => item.vestiging === selectedVestiging);
     }
-    return filtered.map(item => item.customer);
+    // Unieke klanten op basis van customer ID
+    const uniqueCustomers = new Map<string, Customer>();
+    filtered.forEach(item => {
+      if (!uniqueCustomers.has(item.customer.id)) {
+        uniqueCustomers.set(item.customer.id, item.customer);
+      }
+    });
+    return Array.from(uniqueCustomers.values());
   }, [selectedRegio, selectedVestiging, klantenPerRegio]);
 
   // Pie chart data: Actieve klanten vs Prospects
@@ -2585,6 +2914,15 @@ const RegioView = ({ user }: { user: User }) => {
     <div className="space-y-6">
       <div className="flex justify-between items-center">
         <h2 className="text-2xl font-bold text-slate-900">Regio & Sales Overzicht</h2>
+        {user.role === UserRole.ADMIN && (
+          <button
+            onClick={handleRelinkAllLocations}
+            disabled={isLinkingLocations}
+            className="bg-blue-500 text-white px-4 py-2 rounded-lg font-bold hover:bg-blue-600 disabled:opacity-50 transition-colors text-sm"
+          >
+            {isLinkingLocations ? '⏳ Koppelen...' : '🔗 Koppel Alle Locaties'}
+          </button>
+        )}
       </div>
 
       {/* Pie Chart: Actieve Klanten vs Prospects */}

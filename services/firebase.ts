@@ -317,6 +317,10 @@ export const customerService = {
     await setDoc(doc(db, 'locations', location.id), cleanData(location));
   },
 
+  deleteLocation: async (id: string): Promise<void> => {
+    await deleteDoc(doc(db, 'locations', id));
+  },
+
   // NIEUW: Contactpersonen management
   getContactPersons: async (customerId: string): Promise<ContactPerson[]> => {
     try {

@@ -32,6 +32,7 @@ export interface Location {
   name: string; // e.g. "Hoofdkantoor"
   address: string;
   city: string;
+  employeeCount?: number; // Aantal medewerkers op deze locatie
   richtingLocatieId?: string; // ID van de dichtstbijzijnde Richting locatie
   richtingLocatieNaam?: string; // Naam van de dichtstbijzijnde Richting locatie
 }
