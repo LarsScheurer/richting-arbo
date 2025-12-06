@@ -1,0 +1,43 @@
+import { initializeApp } from "firebase/app";
+import { getAuth } from "firebase/auth";
+import { getFirestore, initializeFirestore } from "firebase/firestore";
+
+// Gevonden in je backup bestand (variabele 'eA')
+const firebaseConfig = {
+  apiKey: "AIzaSyDZh5R0sSQ-T3mnk9XS8WA0GV0t_xjD0pY",
+  authDomain: "richting-sales-d764a.firebaseapp.com",
+  projectId: "richting-sales-d764a",
+  storageBucket: "richting-sales-d764a.firebasestorage.app",
+  messagingSenderId: "228500270341",
+  appId: "1:228500270341:web:1e2bbafbc609136a581b6c",
+  measurementId: "G-6833KTWQ8K"
+};
+
+// Initialiseer Firebase
+const app = initializeApp(firebaseConfig);
+
+// Authenticatie
+export const auth = getAuth(app);
+
+// Firestore Database
+// LET OP: In je code wordt specifiek verbinding gemaakt met database id "richting01"
+// Dit is NIET de default database, dus we moeten hem specifiek zo initialiseren.
+export const db = initializeFirestore(app, {
+    ignoreUndefinedProperties: true
+}, "richting01"); // [cite: 1503-1504]
+
+console.log("Firebase geinitialiseerd. Project:", firebaseConfig.projectId, "Database: richting01");
+
+export default app;
+
+# Firebase Config
+VITE_FIREBASE_API_KEY=AIzaSyDZh5R0sSQ-T3mnk9XS8WA0GV0t_xjD0pY
+VITE_FIREBASE_AUTH_DOMAIN=richting-sales-d764a.firebaseapp.com
+VITE_FIREBASE_PROJECT_ID=richting-sales-d764a
+VITE_FIREBASE_STORAGE_BUCKET=richting-sales-d764a.firebasestorage.app
+VITE_FIREBASE_MESSAGING_SENDER_ID=228500270341
+VITE_FIREBASE_APP_ID=1:228500270341:web:1e2bbafbc609136a581b6c
+VITE_FIREBASE_MEASUREMENT_ID=G-6833KTWQ8K
+
+# Gemini AI Key (Gevonden bij variabele 'zh')
+VITE_GOOGLE_GEMINI_API_KEY=AIzaSyBjTJOUHlcE-aE1p1f1C1wAyXXnqmbSQfY

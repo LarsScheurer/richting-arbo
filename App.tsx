@@ -1,6 +1,8 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { User, DocumentSource, KNOWLEDGE_STRUCTURE, DocType, GeminiAnalysisResult, ChatMessage, Customer, Location, UserRole, ContactPerson, OrganisatieProfiel, Risico, Proces, Functie } from './types';
-import { authService, dbService, customerService } from './services/firebase';
+import { authService, dbService, customerService, promptService, Prompt } from './services/firebase';
+import { doc, updateDoc } from 'firebase/firestore';
+import { db } from './services/firebase';
 import { Layout, RichtingLogo } from './components/Layout';
 import { analyzeContent, askQuestion, analyzeOrganisatieBranche, analyzeCultuur } from './services/geminiService';
 
@@ -1009,12 +1011,13 @@ const CustomersView = ({ user, onOpenDoc }: { user: User, onOpenDoc: (d: Documen
 
   // New Customer Form State
   const [newName, setNewName] = useState('');
-  const [newIndustry, setNewIndustry] = useState('');
   const [newWebsite, setNewWebsite] = useState('');
-  const [newLogoUrl, setNewLogoUrl] = useState(''); // NEW STATE
-  const [newEmployeeCount, setNewEmployeeCount] = useState<number | undefined>(undefined);
-  const [newHasRIE, setNewHasRIE] = useState<boolean | undefined>(undefined);
-  const [assignedIds, setAssignedIds] = useState<string[]>([user.id]);
+  
+  // Website Search State
+  const [isSearchingWebsite, setIsSearchingWebsite] = useState(false);
+  const [websiteResults, setWebsiteResults] = useState<Array<{url: string, title: string, snippet: string, confidence: string}>>([]);
+  const [selectedWebsite, setSelectedWebsite] = useState<string>('');
+  const [hasSearched, setHasSearched] = useState(false);
 
   useEffect(() => {
     const fetchData = async () => {
@@ -1028,32 +1031,105 @@ const CustomersView = ({ user, onOpenDoc }: { user: User, onOpenDoc: (d: Documen
     fetchData();
   }, [user]);
 
+  const searchWebsite = useCallback(async (companyName: string) => {
+    if (!companyName.trim()) {
+      return;
+    }
+
+    setIsSearchingWebsite(true);
+    setWebsiteResults([]);
+    setSelectedWebsite('');
+    setHasSearched(false);
+
+    try {
+      // Call Firebase Function to search for website
+      const functionsUrl = 'https://europe-west4-richting-sales-d764a.cloudfunctions.net/searchCompanyWebsite';
+      const response = await fetch(functionsUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ companyName })
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const data = await response.json();
+      const websites = data.websites || [];
+      
+      setWebsiteResults(websites);
+      setHasSearched(true);
+      
+      // Auto-select best match (first result)
+      if (websites.length > 0) {
+        setSelectedWebsite(websites[0].url);
+        setNewWebsite(websites[0].url.replace(/^https?:\/\//, ''));
+      }
+    } catch (error) {
+      console.error("Error searching website:", error);
+      setHasSearched(true);
+      setWebsiteResults([]);
+    } finally {
+      setIsSearchingWebsite(false);
+    }
+  }, []);
+
+  // Auto-search when name changes (with debounce)
+  useEffect(() => {
+    if (!newName.trim() || !showAddModal) {
+      setWebsiteResults([]);
+      setSelectedWebsite('');
+      setNewWebsite('');
+      setHasSearched(false);
+      return;
+    }
+
+    const timeoutId = setTimeout(() => {
+      searchWebsite(newName);
+    }, 1000); // Wait 1 second after user stops typing
+
+    return () => clearTimeout(timeoutId);
+  }, [newName, showAddModal, searchWebsite]);
+
   const handleAddCustomer = async () => {
-    if (!newName) return;
+    if (!newName) {
+      alert("Voer een bedrijfsnaam in");
+      return;
+    }
     
-    // AUTOMATICALLY ENSURE URLS HAVE HTTPS
+    if (!selectedWebsite && !newWebsite) {
+      alert("Selecteer een website of voer handmatig een website in");
+      return;
+    }
+    
+    // Use selected website or manually entered website
+    const websiteToUse = selectedWebsite || newWebsite;
+    
     const newCustomer: Customer = {
       id: `cust_${Date.now()}`,
       name: newName,
-      industry: newIndustry,
-      website: ensureUrl(newWebsite), // FIX: Auto-prefix https://
-      logoUrl: ensureUrl(newLogoUrl), // FIX: Auto-prefix https://
-      status: 'active',
-      assignedUserIds: assignedIds,
+      industry: '', // Empty by default
+      website: websiteToUse ? ensureUrl(websiteToUse) : undefined,
+      logoUrl: undefined,
+      status: 'prospect', // Start as prospect
+      assignedUserIds: [user.id], // Only current user by default
       createdAt: new Date().toISOString(),
-      employeeCount: newEmployeeCount,
-      hasRIE: newHasRIE
+      employeeCount: undefined,
+      hasRIE: undefined
     };
 
     await customerService.addCustomer(newCustomer);
     setCustomers(prev => [...prev, newCustomer]);
     setShowAddModal(false);
+    
+    // Reset all form state
     setNewName('');
-    setNewIndustry('');
     setNewWebsite('');
-    setNewLogoUrl('');
-    setNewEmployeeCount(undefined);
-    setNewHasRIE(undefined);
+    setWebsiteResults([]);
+    setSelectedWebsite('');
+    setHasSearched(false);
   };
 
   const toggleUserAssignment = (userId: string) => {
@@ -1241,103 +1317,128 @@ const CustomersView = ({ user, onOpenDoc }: { user: User, onOpenDoc: (d: Documen
           <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg overflow-hidden">
             <div className="bg-gray-50 px-6 py-4 border-b border-gray-200 flex justify-between items-center">
                <h3 className="font-bold text-slate-800">Nieuwe Klant Aanmaken</h3>
-               <button onClick={() => setShowAddModal(false)} className="text-gray-400 hover:text-gray-600">✕</button>
+               <button 
+                 onClick={() => {
+                   setShowAddModal(false);
+                   // Reset all form state
+                   setNewName('');
+                   setNewWebsite('');
+                   setWebsiteResults([]);
+                   setSelectedWebsite('');
+                   setHasSearched(false);
+                 }} 
+                 className="text-gray-400 hover:text-gray-600"
+               >
+                 ✕
+               </button>
             </div>
             <div className="p-6 space-y-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Bedrijfsnaam</label>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Bedrijfsnaam *</label>
                 <input 
                   type="text" 
                   className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-richting-orange focus:border-richting-orange"
                   placeholder="Bijv. Jansen Bouw B.V."
                   value={newName}
                   onChange={e => setNewName(e.target.value)}
+                  autoFocus
                 />
+                {isSearchingWebsite && (
+                  <p className="text-xs text-gray-500 mt-1 flex items-center gap-1">
+                    <span className="animate-spin">⏳</span> Zoeken naar website...
+                  </p>
+                )}
               </div>
-              <div className="grid grid-cols-2 gap-4">
+
+              {/* Website Search Results */}
+              {hasSearched && websiteResults.length > 0 && (
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Branche</label>
-                  <input 
-                    type="text" 
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-richting-orange focus:border-richting-orange"
-                    placeholder="Bijv. Bouw"
-                    value={newIndustry}
-                    onChange={e => setNewIndustry(e.target.value)}
-                  />
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Website (Best Match op 1) *</label>
+                  <div className="space-y-2 max-h-60 overflow-y-auto">
+                    {websiteResults.map((result, idx) => (
+                      <div
+                        key={idx}
+                        onClick={() => {
+                          setSelectedWebsite(result.url);
+                          setNewWebsite(result.url.replace(/^https?:\/\//, ''));
+                        }}
+                        className={`p-3 border-2 rounded-lg cursor-pointer transition-all ${
+                          selectedWebsite === result.url
+                            ? 'border-richting-orange bg-orange-50'
+                            : 'border-gray-200 bg-white hover:border-gray-300'
+                        }`}
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="flex-1">
+                            {idx === 0 && (
+                              <span className="inline-block px-2 py-0.5 bg-green-100 text-green-700 rounded text-xs font-bold mb-1">
+                                ✓ Best Match
+                              </span>
+                            )}
+                            <div className="flex items-center gap-2 mt-1">
+                              <span className={`px-2 py-0.5 rounded text-xs font-bold ${
+                                result.confidence === 'high' ? 'bg-green-100 text-green-700' :
+                                result.confidence === 'medium' ? 'bg-yellow-100 text-yellow-700' :
+                                'bg-gray-100 text-gray-600'
+                              }`}>
+                                {result.confidence}
+                              </span>
+                              <a 
+                                href={result.url} 
+                                target="_blank" 
+                                rel="noreferrer"
+                                onClick={e => e.stopPropagation()}
+                                className="text-richting-orange hover:underline text-sm font-medium flex items-center gap-1"
+                              >
+                                {result.url} <ExternalLinkIcon />
+                              </a>
+                            </div>
+                            {result.title && (
+                              <p className="text-sm font-semibold text-slate-900 mt-1">{result.title}</p>
+                            )}
+                            {result.snippet && (
+                              <p className="text-xs text-gray-600 mt-1 line-clamp-2">{result.snippet}</p>
+                            )}
+                          </div>
+                          <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${
+                            selectedWebsite === result.url
+                              ? 'border-richting-orange bg-richting-orange'
+                              : 'border-gray-300'
+                          }`}>
+                            {selectedWebsite === result.url && (
+                              <span className="text-white text-xs">✓</span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
                 </div>
+              )}
+
+              {hasSearched && websiteResults.length === 0 && (
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Website</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Website *</label>
+                  <div className="border border-yellow-200 rounded-lg p-3 bg-yellow-50 mb-2">
+                    <p className="text-sm text-gray-700">Geen websites gevonden. Voer handmatig een website in.</p>
+                  </div>
                   <input 
                     type="text" 
                     className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-richting-orange focus:border-richting-orange"
                     placeholder="richting.nl (zonder https://)"
                     value={newWebsite}
-                    onChange={e => setNewWebsite(e.target.value)}
+                    onChange={e => {
+                      setNewWebsite(e.target.value);
+                      setSelectedWebsite('');
+                    }}
                   />
                 </div>
-              </div>
-
-              {/* MANUAL LOGO URL INPUT */}
-              <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Logo URL (Optioneel)</label>
-                  <input 
-                    type="text" 
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-richting-orange focus:border-richting-orange"
-                    placeholder="Link naar afbeelding"
-                    value={newLogoUrl}
-                    onChange={e => setNewLogoUrl(e.target.value)}
-                  />
-                  <p className="text-xs text-gray-500 mt-1">Vul hier een link in als het automatische logo niet werkt.</p>
-              </div>
-
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Aantal Medewerkers (Optioneel)</label>
-                  <input 
-                    type="number" 
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-richting-orange focus:border-richting-orange"
-                    placeholder="Bijv. 20000"
-                    value={newEmployeeCount || ''}
-                    onChange={e => setNewEmployeeCount(e.target.value ? parseInt(e.target.value) : undefined)}
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">RIE Status</label>
-                  <select
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-richting-orange focus:border-richting-orange bg-white"
-                    value={newHasRIE === undefined ? '' : newHasRIE ? 'true' : 'false'}
-                    onChange={e => setNewHasRIE(e.target.value === '' ? undefined : e.target.value === 'true')}
-                  >
-                    <option value="">Niet opgegeven</option>
-                    <option value="true">Heeft RIE</option>
-                    <option value="false">Geen RIE</option>
-                  </select>
-                </div>
-              </div>
-              
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Team Toegang</label>
-                <div className="border border-gray-200 rounded-md max-h-40 overflow-y-auto divide-y divide-gray-100">
-                  {allUsers.map(u => (
-                    <div 
-                      key={u.id} 
-                      onClick={() => toggleUserAssignment(u.id)}
-                      className={`flex items-center gap-3 p-2 cursor-pointer hover:bg-gray-50 ${assignedIds.includes(u.id) ? 'bg-orange-50' : ''}`}
-                    >
-                      <div className={`w-4 h-4 rounded border flex items-center justify-center ${assignedIds.includes(u.id) ? 'bg-richting-orange border-richting-orange' : 'border-gray-300'}`}>
-                        {assignedIds.includes(u.id) && <span className="text-white text-xs">✓</span>}
-                      </div>
-                      <img src={u.avatarUrl} className="w-6 h-6 rounded-full" />
-                      <span className="text-sm text-gray-700">{u.name} {u.id === user.id && '(Jij)'}</span>
-                    </div>
-                  ))}
-                </div>
-                <p className="text-xs text-gray-500 mt-1">Geselecteerde collega's krijgen toegang tot dit dossier.</p>
-              </div>
+              )}
 
               <button 
                 onClick={handleAddCustomer}
-                className="w-full mt-4 bg-richting-orange text-white py-3 rounded-lg font-bold hover:bg-orange-600 transition-colors"
+                disabled={!newName || (!selectedWebsite && !newWebsite)}
+                className="w-full mt-4 bg-richting-orange text-white py-3 rounded-lg font-bold hover:bg-orange-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 Klant Aanmaken
               </button>
@@ -1818,6 +1919,427 @@ const UploadView = ({ user, onUploadComplete }: { user: User, onUploadComplete: 
   );
 };
 
+// --- SETTINGS VIEW ---
+const SettingsView = ({ user }: { user: User }) => {
+  const [activeTab, setActiveTab] = useState<'autorisatie' | 'promptbeheer'>('autorisatie');
+  const [users, setUsers] = useState<User[]>([]);
+  const [prompts, setPrompts] = useState<Prompt[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [selectedPrompt, setSelectedPrompt] = useState<Prompt | null>(null);
+  const [promptContent, setPromptContent] = useState('');
+  const [promptName, setPromptName] = useState('');
+  const [promptType, setPromptType] = useState<'branche_analyse' | 'publiek_cultuur_profiel' | 'other'>('branche_analyse');
+  const [showPromptEditor, setShowPromptEditor] = useState(false);
+  const [uploadingFile, setUploadingFile] = useState(false);
+
+  useEffect(() => {
+    const loadData = async () => {
+      setLoading(true);
+      try {
+        const [usersData, promptsData] = await Promise.all([
+          authService.getAllUsers(),
+          promptService.getPrompts()
+        ]);
+        setUsers(usersData);
+        setPrompts(promptsData);
+      } catch (error) {
+        console.error("Error loading settings data:", error);
+      } finally {
+        setLoading(false);
+      }
+    };
+    loadData();
+  }, []);
+
+  const handleRoleChange = async (userId: string, newRole: UserRole) => {
+    try {
+      await authService.updateUserRole(userId, newRole);
+      setUsers(prev => prev.map(u => u.id === userId ? { ...u, role: newRole } : u));
+      if (user.id === userId) {
+        window.location.reload(); // Reload if current user's role changed
+      }
+    } catch (error) {
+      console.error("Error updating user role:", error);
+      alert("Fout bij het bijwerken van de rol. Probeer het opnieuw.");
+    }
+  };
+
+  const handleSavePrompt = async () => {
+    if (!promptName || !promptContent) {
+      alert("Vul naam en inhoud in");
+      return;
+    }
+
+    try {
+      const promptData = {
+        name: promptName,
+        type: promptType,
+        promptTekst: promptContent,
+        versie: selectedPrompt?.versie || 1,
+        isActief: selectedPrompt?.isActief ?? false,
+        files: selectedPrompt?.files || []
+      };
+
+      await promptService.savePrompt(
+        selectedPrompt ? { ...promptData, id: selectedPrompt.id } : promptData,
+        user.id
+      );
+
+      const updatedPrompts = await promptService.getPrompts();
+      setPrompts(updatedPrompts);
+      setShowPromptEditor(false);
+      setSelectedPrompt(null);
+      setPromptName('');
+      setPromptContent('');
+    } catch (error) {
+      console.error("Error saving prompt:", error);
+      alert("Fout bij het opslaan van de prompt. Probeer het opnieuw.");
+    }
+  };
+
+  const handleActivatePrompt = async (promptId: string, type: 'branche_analyse' | 'publiek_cultuur_profiel') => {
+    if (!window.confirm('Weet je zeker dat je deze prompt wilt activeren? Dit deactiveert alle andere prompts van dit type (maar andere types blijven actief).')) {
+      return;
+    }
+
+    try {
+      await promptService.activatePrompt(promptId, type);
+      const updatedPrompts = await promptService.getPrompts();
+      setPrompts(updatedPrompts);
+      // Update selected prompt if it's the one we activated
+      if (selectedPrompt && selectedPrompt.id === promptId) {
+        const updated = await promptService.getPrompt(promptId);
+        if (updated) setSelectedPrompt(updated);
+      }
+      alert('Prompt geactiveerd!');
+    } catch (error) {
+      console.error("Error activating prompt:", error);
+      alert("Fout bij het activeren van de prompt. Probeer het opnieuw.");
+    }
+  };
+
+  const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>, promptId: string) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    setUploadingFile(true);
+    try {
+      const reader = new FileReader();
+      reader.onload = async (e) => {
+        const content = e.target?.result as string;
+        await promptService.addFileToPrompt(promptId, file.name, content);
+        const updatedPrompts = await promptService.getPrompts();
+        setPrompts(updatedPrompts);
+        setUploadingFile(false);
+      };
+      reader.readAsText(file);
+    } catch (error) {
+      console.error("Error uploading file:", error);
+      alert("Fout bij het uploaden van het bestand.");
+      setUploadingFile(false);
+    }
+  };
+
+  const handleEditPrompt = (prompt: Prompt) => {
+    setSelectedPrompt(prompt);
+    setPromptName(prompt.name);
+    setPromptContent(prompt.promptTekst || '');
+    setPromptType(prompt.type);
+    setShowPromptEditor(true);
+  };
+
+  const handleNewPrompt = () => {
+    setSelectedPrompt(null);
+    setPromptName('');
+    setPromptContent('');
+    setPromptType('branche_analyse');
+    setShowPromptEditor(true);
+  };
+
+  if (loading) {
+    return <div className="text-center py-10 text-gray-500">Laden...</div>;
+  }
+
+  return (
+    <div className="space-y-6">
+      <div className="flex justify-between items-center mb-6">
+        <h2 className="text-2xl font-bold text-slate-900">Instellingen</h2>
+      </div>
+
+      {/* Tabs */}
+      <div className="flex border-b border-gray-200 mb-6">
+        <button
+          onClick={() => setActiveTab('autorisatie')}
+          className={`px-6 py-3 text-sm font-medium transition-colors ${
+            activeTab === 'autorisatie'
+              ? 'text-richting-orange border-b-2 border-richting-orange'
+              : 'text-gray-500 hover:text-gray-700'
+          }`}
+        >
+          🔐 Autorisatie
+        </button>
+        <button
+          onClick={() => setActiveTab('promptbeheer')}
+          className={`px-6 py-3 text-sm font-medium transition-colors ${
+            activeTab === 'promptbeheer'
+              ? 'text-richting-orange border-b-2 border-richting-orange'
+              : 'text-gray-500 hover:text-gray-700'
+          }`}
+        >
+          📝 Promptbeheer
+        </button>
+      </div>
+
+      {/* Autorisatie Tab */}
+      {activeTab === 'autorisatie' && (
+        <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+          <h3 className="text-lg font-bold text-slate-900 mb-4">Gebruikersbeheer</h3>
+          <div className="space-y-4">
+            {users.map(u => (
+              <div key={u.id} className="flex items-center justify-between p-4 border border-gray-200 rounded-lg">
+                <div className="flex items-center gap-4">
+                  <img src={u.avatarUrl || `https://ui-avatars.com/api/?name=${encodeURIComponent(u.name)}`} alt={u.name} className="w-10 h-10 rounded-full" />
+                  <div>
+                    <p className="font-bold text-slate-900">{u.name}</p>
+                    <p className="text-sm text-gray-500">{u.email}</p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <select
+                    value={u.role}
+                    onChange={(e) => handleRoleChange(u.id, e.target.value as UserRole)}
+                    className="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-richting-orange focus:border-richting-orange"
+                  >
+                    <option value={UserRole.ADMIN}>Admin</option>
+                    <option value={UserRole.EDITOR}>Editor</option>
+                    <option value={UserRole.READER}>Reader</option>
+                  </select>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Promptbeheer Tab */}
+      {activeTab === 'promptbeheer' && (
+        <div className="space-y-6">
+          <div className="flex justify-between items-center">
+            <h3 className="text-lg font-bold text-slate-900">Prompts</h3>
+            <button
+              onClick={handleNewPrompt}
+              className="bg-richting-orange text-white px-4 py-2 rounded-lg font-bold hover:bg-orange-600 transition-colors"
+            >
+              + Nieuwe Prompt
+            </button>
+          </div>
+
+          {showPromptEditor ? (
+            <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+              <h4 className="text-lg font-bold text-slate-900 mb-4">
+                {selectedPrompt ? 'Prompt Bewerken' : 'Nieuwe Prompt'}
+              </h4>
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Naam</label>
+                  <input
+                    type="text"
+                    value={promptName}
+                    onChange={(e) => setPromptName(e.target.value)}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-richting-orange focus:border-richting-orange"
+                    placeholder="Bijv. Branche Analyse Prompt"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Type</label>
+                  <select
+                    value={promptType}
+                    onChange={(e) => setPromptType(e.target.value as any)}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-richting-orange focus:border-richting-orange"
+                  >
+                    <option value="branche_analyse">Branche Analyse</option>
+                    <option value="publiek_cultuur_profiel">Publiek Cultuur Profiel</option>
+                    <option value="other">Anders</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Inhoud (promptTekst)</label>
+                  <textarea
+                    value={promptContent}
+                    onChange={(e) => setPromptContent(e.target.value)}
+                    rows={15}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-richting-orange focus:border-richting-orange font-mono text-sm"
+                    placeholder="Voer de prompt inhoud in..."
+                  />
+                </div>
+                {selectedPrompt && (
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      id="isActief"
+                      checked={selectedPrompt.isActief || false}
+                      onChange={async (e) => {
+                        if (selectedPrompt && (selectedPrompt.type === 'branche_analyse' || selectedPrompt.type === 'publiek_cultuur_profiel')) {
+                          if (e.target.checked) {
+                            await handleActivatePrompt(selectedPrompt.id, selectedPrompt.type as 'branche_analyse' | 'publiek_cultuur_profiel');
+                            const updated = await promptService.getPrompt(selectedPrompt.id);
+                            if (updated) setSelectedPrompt(updated);
+                          } else {
+                            // Deactivate
+                            await updateDoc(doc(db, 'prompts', selectedPrompt.id), { 
+                              isActief: false,
+                              updatedAt: new Date().toISOString()
+                            });
+                            const updated = await promptService.getPrompt(selectedPrompt.id);
+                            if (updated) setSelectedPrompt(updated);
+                            const allPrompts = await promptService.getPrompts();
+                            setPrompts(allPrompts);
+                          }
+                        }
+                      }}
+                      disabled={selectedPrompt.type === 'other'}
+                      className="w-4 h-4 text-richting-orange border-gray-300 rounded focus:ring-richting-orange"
+                    />
+                    <label htmlFor="isActief" className="text-sm text-gray-700">
+                      Actief (alleen voor Branche Analyse / Publiek Cultuur Profiel)
+                    </label>
+                  </div>
+                )}
+                {selectedPrompt && selectedPrompt.files && selectedPrompt.files.length > 0 && (
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">Bijgevoegde Bestanden</label>
+                    <div className="space-y-2">
+                      {selectedPrompt.files.map(file => (
+                        <div key={file.id} className="flex items-center justify-between p-2 bg-gray-50 rounded border">
+                          <span className="text-sm text-gray-700">{file.name}</span>
+                          <button
+                            onClick={async () => {
+                              if (selectedPrompt) {
+                                await promptService.deleteFileFromPrompt(selectedPrompt.id, file.id);
+                                const updated = await promptService.getPrompt(selectedPrompt.id);
+                                if (updated) setSelectedPrompt(updated);
+                                const allPrompts = await promptService.getPrompts();
+                                setPrompts(allPrompts);
+                              }
+                            }}
+                            className="text-red-500 hover:text-red-700 text-sm"
+                          >
+                            Verwijderen
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {selectedPrompt && (
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">Bestand Toevoegen</label>
+                    <input
+                      type="file"
+                      onChange={(e) => selectedPrompt && handleFileUpload(e, selectedPrompt.id)}
+                      disabled={uploadingFile}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                    />
+                    {uploadingFile && <p className="text-sm text-gray-500 mt-2">Uploaden...</p>}
+                  </div>
+                )}
+                <div className="flex gap-4">
+                  <button
+                    onClick={handleSavePrompt}
+                    className="bg-richting-orange text-white px-6 py-2 rounded-lg font-bold hover:bg-orange-600 transition-colors"
+                  >
+                    Opslaan
+                  </button>
+                  <button
+                    onClick={() => {
+                      setShowPromptEditor(false);
+                      setSelectedPrompt(null);
+                      setPromptName('');
+                      setPromptContent('');
+                    }}
+                    className="bg-gray-200 text-gray-700 px-6 py-2 rounded-lg font-bold hover:bg-gray-300 transition-colors"
+                  >
+                    Annuleren
+                  </button>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-6">
+              {/* Group prompts by type */}
+              {['branche_analyse', 'publiek_cultuur_profiel', 'other'].map(type => {
+                const typePrompts = prompts.filter(p => p.type === type);
+                if (typePrompts.length === 0) return null;
+
+                return (
+                  <div key={type} className="space-y-4">
+                    <h4 className="text-md font-bold text-slate-700 uppercase tracking-wide">
+                      {type === 'branche_analyse' ? 'Branche Analyse' : type === 'publiek_cultuur_profiel' ? 'Publiek Cultuur Profiel' : 'Andere Prompts'}
+                    </h4>
+                    {typePrompts
+                      .sort((a, b) => (b.versie || 0) - (a.versie || 0))
+                      .map(prompt => (
+                        <div key={prompt.id} className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+                          <div className="flex justify-between items-start mb-4">
+                            <div className="flex-1">
+                              <div className="flex items-center gap-3 mb-2">
+                                <h4 className="font-bold text-slate-900">{prompt.name}</h4>
+                                <span className="px-2 py-0.5 bg-blue-100 text-blue-700 rounded text-xs font-bold">
+                                  Versie {prompt.versie || 1}
+                                </span>
+                                {prompt.isActief && (
+                                  <span className="px-2 py-0.5 bg-green-100 text-green-700 rounded text-xs font-bold">
+                                    ✓ Actief
+                                  </span>
+                                )}
+                              </div>
+                              <p className="text-xs text-gray-400">
+                                Aangemaakt: {new Date(prompt.createdAt).toLocaleDateString('nl-NL')}
+                                {prompt.files && prompt.files.length > 0 && (
+                                  <span className="ml-2">• {prompt.files.length} bestand(en)</span>
+                                )}
+                              </p>
+                            </div>
+                            <div className="flex gap-2">
+                              {(prompt.type === 'branche_analyse' || prompt.type === 'publiek_cultuur_profiel') && !prompt.isActief && (
+                                <button
+                                  onClick={() => handleActivatePrompt(prompt.id, prompt.type as 'branche_analyse' | 'publiek_cultuur_profiel')}
+                                  className="bg-green-600 text-white px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-green-700 transition-colors"
+                                >
+                                  Activeer
+                                </button>
+                              )}
+                              <button
+                                onClick={() => handleEditPrompt(prompt)}
+                                className="text-richting-orange hover:text-orange-600 font-bold text-sm px-3 py-1.5"
+                              >
+                                Bewerken
+                              </button>
+                            </div>
+                          </div>
+                          <div className="bg-gray-50 p-4 rounded border border-gray-200">
+                            <p className="text-sm text-gray-700 font-mono whitespace-pre-wrap line-clamp-3">
+                              {prompt.promptTekst?.substring(0, 300) || ''}...
+                            </p>
+                          </div>
+                        </div>
+                      ))}
+                  </div>
+                );
+              })}
+              {prompts.length === 0 && (
+                <div className="text-center py-10 text-gray-500 bg-white rounded-xl border border-gray-200">
+                  <p>Nog geen prompts. Maak je eerste prompt aan.</p>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
 // --- MAIN APP COMPONENT ---
 const App = () => {
   const [user, setUser] = useState<User | null>(null);
@@ -2001,6 +2523,7 @@ const App = () => {
            onUploadComplete={() => { setCurrentView('dashboard'); }} 
         />
       )}
+      {currentView === 'settings' && <SettingsView user={user} />}
 
       {/* DOCUMENT MODAL */}
       {selectedDoc && (

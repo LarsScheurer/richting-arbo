@@ -47,7 +47,7 @@ const auth = getAuth(app);
 // Firestore Database
 // LET OP: In je code wordt specifiek verbinding gemaakt met database id "richting01"
 // Dit is NIET de default database, dus we moeten hem specifiek zo initialiseren.
-const db = initializeFirestore(app, {
+export const db = initializeFirestore(app, {
   ignoreUndefinedProperties: true
 }, "richting01"); // Gebruik initializeFirestore voor named database
 
@@ -102,6 +102,16 @@ export const authService = {
 
   updateUserRole: async (userId: string, role: UserRole): Promise<void> => {
     await updateDoc(doc(db, 'users', userId), { role });
+  },
+
+  getAllUsers: async (): Promise<User[]> => {
+    try {
+      const snapshot = await getDocs(collection(db, 'users'));
+      return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as User));
+    } catch (e) {
+      console.error("Error getting all users:", e);
+      return [];
+    }
   },
 
   onAuthStateChange: (callback: (user: User | null) => void) => {
@@ -337,6 +347,195 @@ export const customerService = {
     } catch (e) {
       console.error("Error fetching organisatie profiel:", e);
       return null;
+    }
+  }
+};
+
+// --- PROMPT SERVICE ---
+export interface Prompt {
+  id: string;
+  name: string;
+  type: 'branche_analyse' | 'publiek_cultuur_profiel' | 'other';
+  promptTekst: string; // Inhoud van de prompt
+  versie: number; // Versie nummer
+  isActief: boolean; // Actief status (Nederlandse naam zoals in functions)
+  files?: Array<{
+    id: string;
+    name: string;
+    content: string;
+    uploadedAt: string;
+  }>;
+  createdAt: string;
+  updatedAt: string;
+  createdBy?: string; // User ID die de prompt heeft aangemaakt
+}
+
+export const promptService = {
+  getPrompts: async (): Promise<Prompt[]> => {
+    try {
+      const snapshot = await getDocs(collection(db, 'prompts'));
+      return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Prompt));
+    } catch (e) {
+      console.error("Error getting prompts:", e);
+      return [];
+    }
+  },
+
+  getPrompt: async (promptId: string): Promise<Prompt | null> => {
+    try {
+      const docRef = doc(db, 'prompts', promptId);
+      const docSnap = await getDoc(docRef);
+      if (!docSnap.exists()) return null;
+      return { id: docSnap.id, ...docSnap.data() } as Prompt;
+    } catch (e) {
+      console.error("Error getting prompt:", e);
+      return null;
+    }
+  },
+
+  getActivePrompt: async (type: 'branche_analyse' | 'publiek_cultuur_profiel'): Promise<Prompt | null> => {
+    try {
+      const q = query(
+        collection(db, 'prompts'), 
+        where('type', '==', type), 
+        where('isActief', '==', true),
+        orderBy('versie', 'desc')
+      );
+      const snapshot = await getDocs(q);
+      if (snapshot.empty) return null;
+      return { id: snapshot.docs[0].id, ...snapshot.docs[0].data() } as Prompt;
+    } catch (e) {
+      // Fallback: get all active and sort in memory
+      try {
+        const q = query(
+          collection(db, 'prompts'), 
+          where('type', '==', type), 
+          where('isActief', '==', true)
+        );
+        const snapshot = await getDocs(q);
+        if (snapshot.empty) return null;
+        const sorted = snapshot.docs.sort((a, b) => {
+          const versieA = a.data().versie || 0;
+          const versieB = b.data().versie || 0;
+          return versieB - versieA;
+        });
+        return { id: sorted[0].id, ...sorted[0].data() } as Prompt;
+      } catch (e2) {
+        console.error("Error getting active prompt:", e2);
+        return null;
+      }
+    }
+  },
+
+  savePrompt: async (prompt: Omit<Prompt, 'id' | 'createdAt' | 'updatedAt'> & { id?: string }, userId?: string): Promise<string> => {
+    try {
+      const now = new Date().toISOString();
+      
+      if (prompt.id) {
+        // Update existing prompt
+        const docRef = doc(db, 'prompts', prompt.id);
+        await updateDoc(docRef, {
+          name: prompt.name,
+          type: prompt.type,
+          promptTekst: prompt.promptTekst,
+          versie: prompt.versie,
+          isActief: prompt.isActief,
+          files: prompt.files || [],
+          updatedAt: now
+        });
+        return prompt.id;
+      } else {
+        // Create new prompt - get next version number
+        const existingPrompts = await getDocs(
+          query(collection(db, 'prompts'), where('type', '==', prompt.type))
+        );
+        const maxVersie = existingPrompts.docs.reduce((max, d) => {
+          const v = d.data().versie || 0;
+          return v > max ? v : max;
+        }, 0);
+        
+        const promptData = {
+          name: prompt.name,
+          type: prompt.type,
+          promptTekst: prompt.promptTekst,
+          versie: maxVersie + 1,
+          isActief: prompt.isActief ?? false,
+          files: prompt.files || [],
+          createdAt: now,
+          updatedAt: now,
+          createdBy: userId
+        };
+        
+        const docRef = await addDoc(collection(db, 'prompts'), promptData);
+        return docRef.id;
+      }
+    } catch (e) {
+      console.error("Error saving prompt:", e);
+      throw e;
+    }
+  },
+
+  activatePrompt: async (promptId: string, type: 'branche_analyse' | 'publiek_cultuur_profiel'): Promise<void> => {
+    try {
+      // Deactivate all prompts of THIS SPECIFIC TYPE only
+      // Different types can be active at the same time
+      const allPromptsOfType = await getDocs(
+        query(collection(db, 'prompts'), where('type', '==', type))
+      );
+      
+      const deactivatePromises = allPromptsOfType.docs
+        .filter(d => d.id !== promptId) // Don't deactivate the one we're activating
+        .map(d => updateDoc(doc(db, 'prompts', d.id), { isActief: false }));
+      
+      await Promise.all(deactivatePromises);
+      
+      // Activate the selected prompt
+      await updateDoc(doc(db, 'prompts', promptId), { 
+        isActief: true,
+        updatedAt: new Date().toISOString()
+      });
+    } catch (e) {
+      console.error("Error activating prompt:", e);
+      throw e;
+    }
+  },
+
+  addFileToPrompt: async (promptId: string, fileName: string, fileContent: string): Promise<void> => {
+    try {
+      const prompt = await promptService.getPrompt(promptId);
+      if (!prompt) throw new Error("Prompt not found");
+      
+      const files = prompt.files || [];
+      const newFile = {
+        id: `file_${Date.now()}`,
+        name: fileName,
+        content: fileContent,
+        uploadedAt: new Date().toISOString()
+      };
+      
+      await updateDoc(doc(db, 'prompts', promptId), {
+        files: [...files, newFile],
+        updatedAt: new Date().toISOString()
+      });
+    } catch (e) {
+      console.error("Error adding file to prompt:", e);
+      throw e;
+    }
+  },
+
+  deleteFileFromPrompt: async (promptId: string, fileId: string): Promise<void> => {
+    try {
+      const prompt = await promptService.getPrompt(promptId);
+      if (!prompt) throw new Error("Prompt not found");
+      
+      const files = (prompt.files || []).filter(f => f.id !== fileId);
+      await updateDoc(doc(db, 'prompts', promptId), {
+        files,
+        updatedAt: new Date().toISOString()
+      });
+    } catch (e) {
+      console.error("Error deleting file from prompt:", e);
+      throw e;
     }
   }
 };

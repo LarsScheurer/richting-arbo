@@ -35,6 +35,7 @@ export const Layout: React.FC<LayoutProps> = ({ children, user, onLogout, curren
     { id: 'knowledge', label: 'Kennisbank', icon: '📚' },
     { id: 'chat', label: 'Vraag het Gemini', icon: '✨' },
     { id: 'upload', label: 'Nieuwe Bron', icon: '➕' },
+    ...(user.role === UserRole.ADMIN ? [{ id: 'settings', label: 'Instellingen', icon: '⚙️' }] : []),
   ];
 
   const handleRoleSwitch = async (role: UserRole) => {

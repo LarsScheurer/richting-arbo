@@ -1,0 +1,129 @@
+import { GoogleGenerativeAI } from "@google/generative-ai"; // Veronderstelde import op basis van gebruik
+
+// Versie informatie gevonden in de code
+const GEMINI_API_VERSION = "v1beta"; // 
+const GENAI_JS_VERSION = "0.24.1";   // 
+
+// Let op: Deze API key stond hardcoded in je frontend code.
+// Voor een veilige backend implementatie moet deze in een environment variable (.env) staan.
+const API_KEY = "AIzaSyBjTJOUHlcE-aE1p1f1C1wAyXXnqmbSQfY"; // 
+
+const genAI = new GoogleGenerativeAI(API_KEY); // [cite: 1565, 1567]
+
+// Configuratie voor het model
+const modelConfig = {
+    model: "gemini-2.5-flash", // [cite: 1568]
+};
+
+/**
+ * Analyseert tekst en retourneert een samenvatting, categorie en tags.
+ * @param {string} text - De te analyseren tekst
+ * @returns {Promise<Object>} - Het resultaat in JSON formaat
+ */
+export const analyzeText = async (text) => {
+    if (!genAI) {
+        console.warn("No API Key provided. Returning mock analysis.");
+        return {
+            summary: "AI analyse niet beschikbaar (geen API key). Dit is een placeholder.",
+            mainCategoryId: "strategy",
+            subCategoryId: "yearplan",
+            tags: ["Demo", "NoKey"]
+        };
+    }
+
+    try {
+        // De prompt voor analyse, categorieën en tags
+        const prompt = `
+      Je bent een content analist voor Richting.nl. Analyseer de volgende tekst.
+      
+      TAAK:
+      1. Schrijf een scherpe, zakelijke samenvatting (max 25 woorden).
+      2. Categoriseer het document door een Main Category ID en een Sub Category ID te kiezen uit de lijst hieronder.
+      3. Genereer 3 relevante tags.
+      
+      CATEGORIE STRUCTUUR:
+      [Lijst met categorieën wordt hier ingevoegd...]
+      
+      TEKST:
+      ${text.substring(0, 10000)}
+      
+      Geef het antwoord in JSON formaat:
+      {
+        "summary": "...",
+        "mainCategoryId": "...",
+        "subCategoryId": "...",
+        "tags": ["...", "...", "..."]
+      }
+    `; // [cite: 1567-1568]
+
+        const model = genAI.getGenerativeModel(modelConfig);
+        const result = await model.generateContent(prompt);
+        const response = await result.response;
+        
+        let jsonString = response.text().replace(/```json/g, "").replace(/```/g, "").trim();
+        const jsonMatch = jsonString.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+            jsonString = jsonMatch[0];
+        }
+
+        return JSON.parse(jsonString);
+
+    } catch (error) {
+        console.error("Gemini analysis failed:", error);
+        return {
+            summary: "Fout bij analyse.",
+            mainCategoryId: "strategy",
+            subCategoryId: "yearplan",
+            tags: ["Error"]
+        };
+    }
+};
+
+/**
+ * Beantwoordt een vraag op basis van een lijst met documenten.
+ * @param {string} question - De vraag van de gebruiker
+ * @param {Array} documents - Lijst met documenten als context
+ * @returns {Promise<Object>} - Het antwoord en citaties
+ */
+export const askQuestion = async (question, documents) => {
+    if (!genAI) {
+        return { answer: "Configureer de API key om de AI assistent te gebruiken.", citedIds: [] };
+    }
+
+    try {
+        // Prompt voor de Q&A functionaliteit
+        const context = `
+      Je bent de AI Kennisbank assistent van Richting.nl.
+      Beantwoord de vraag op basis van de bronnen.
+      
+      BELANGRIJK:
+      - Citeer je bronnen door de titel te noemen.
+      - Wees professioneel, direct en behulpzaam.
+      - Als het antwoord niet in de bronnen staat, geef dit aan.
+      
+      BRONNEN:
+      ${documents.filter(doc => !doc.isArchived).slice(0, 15).map(doc => `ID: ${doc.id}
+TITEL: ${doc.title}
+CATEGORIE: ${doc.mainCategoryId}
+INHOUD: ${doc.content.substring(0, 800)}
+---`).join("\n")}
+      
+      VRAAG:
+      ${question}
+    `; // [cite: 1569-1570]
+
+        const model = genAI.getGenerativeModel(modelConfig);
+        const result = await model.generateContent(context);
+        const response = await result.response;
+
+        return {
+            answer: response.text() || "Geen antwoord.",
+            citedIds: []
+        };
+    } catch (error) {
+        return {
+            answer: "Excuses, ik kan de vraag niet verwerken.",
+            citedIds: []
+        };
+    }
+};

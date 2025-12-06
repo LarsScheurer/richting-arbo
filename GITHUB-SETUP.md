@@ -60,3 +60,5 @@ crontab -e
 - Het script pusht automatisch naar de `main` branch
 - Als de push faalt, moet je handmatig pushen: `git push origin main`
 
+
+

@@ -1,0 +1,3 @@
+// Plak hier de code die je uit de browser hebt gekopieerd
+// Dit bestand wordt daarna gebruikt om App.tsx te updaten
+

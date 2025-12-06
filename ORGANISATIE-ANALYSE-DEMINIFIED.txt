@@ -1,0 +1,174 @@
+import { GoogleGenerativeAI } from "@google/generative-ai";
+
+// 1. Configuratie en Categorieën
+// Dit is de lijst die meegegeven wordt aan de AI om uit te kiezen
+const CATEGORIES = [
+    {
+        id: "strategy",
+        label: "Strategie & Visie",
+        subCategories: [
+            { id: "yearplan", label: "Jaarplannen" },
+            { id: "management", label: "Directie" },
+            { id: "market", label: "Marktontwikkeling" }
+        ]
+    },
+    {
+        id: "hr",
+        label: "HR & Organisatie",
+        subCategories: [
+            { id: "handbook", label: "Handboek" },
+            { id: "leave", label: "Verlof & Verzuim" },
+            { id: "onboarding", label: "Onboarding" },
+            { id: "wfh", label: "Thuiswerken" }
+        ]
+    },
+    {
+        id: "marketing",
+        label: "Marketing & Sales",
+        subCategories: [
+            { id: "branding", label: "Branding" },
+            { id: "campaigns", label: "Campagnes" },
+            { id: "products", label: "Productsheets" },
+            { id: "scripts", label: "Sales Scripts" }
+        ]
+    },
+    {
+        id: "tech",
+        label: "IT & Development",
+        subCategories: [
+            { id: "security", label: "Security" },
+            { id: "manuals", label: "Handleidingen" },
+            { id: "stack", label: "Tech Stack" },
+            { id: "protocols", label: "Protocollen" }
+        ]
+    },
+    {
+        id: "projects",
+        label: "Projecten",
+        subCategories: [
+            { id: "active", label: "Lopend" },
+            { id: "finished", label: "Afgerond" },
+            { id: "cases", label: "Case Studies" }
+        ]
+    }
+];
+
+// 2. Initialiseer Gemini (Let op: API key zat hardcoded in je bestand, verplaats dit liever naar .env)
+const API_KEY = "JOUW_GOOGLE_GEMINI_API_KEY"; 
+const genAI = new GoogleGenerativeAI(API_KEY);
+
+// 3. De Analyse Functie
+export const analyzeDocument = async (text) => {
+    if (!genAI) {
+        console.warn("No API Key provided.");
+        return null;
+    }
+
+    try {
+        [cite_start]// Dit is de specifieke prompt die je zocht [cite: 1567-1568]
+        const prompt = `
+      Je bent een content analist voor Richting.nl. Analyseer de volgende tekst.
+      
+      TAAK:
+      1. Schrijf een scherpe, zakelijke samenvatting (max 25 woorden).
+      2. Categoriseer het document door een Main Category ID en een Sub Category ID te kiezen uit de lijst hieronder.
+      3. Genereer 3 relevante tags.
+      
+      CATEGORIE STRUCTUUR:
+      ${CATEGORIES.map(cat => `HOOFDCATEGORIE: ${cat.label} (ID: ${cat.id})
+       SUBCATEGORIEËN: ${cat.subCategories.map(sub => `${sub.label} (ID: ${sub.id})`).join(", ")}`).join("\n")}
+      
+      TEKST:
+      ${text.substring(0, 10000)}
+      
+      Geef het antwoord in JSON formaat:
+      {
+        "summary": "...",
+        "mainCategoryId": "...",
+        "subCategoryId": "...",
+        "tags": ["...", "...", "..."]
+      }
+    `;
+
+        // Het model aanroepen
+        const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+        const result = await model.generateContent(prompt);
+        const response = await result.response;
+        
+        // De JSON uit de tekst halen (soms zet Gemini er markdown omheen)
+        let jsonString = response.text().replace(/```json/g, "").replace(/```/g, "").trim();
+        
+        // Fallback voor als er extra tekst omheen zit
+        const jsonMatch = jsonString.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+            jsonString = jsonMatch[0];
+        }
+
+        const data = JSON.parse(jsonString);
+
+        // Validatie of de categorie bestaat, anders fallback naar de eerste
+        const mainCat = CATEGORIES.find(c => c.id === data.mainCategoryId) || CATEGORIES[0];
+        const subCatId = mainCat.subCategories.some(s => s.id === data.subCategoryId) 
+            ? data.subCategoryId 
+            : mainCat.subCategories[0].id;
+
+        return {
+            summary: data.summary || "Geen samenvatting beschikbaar.",
+            mainCategoryId: mainCat.id,
+            subCategoryId: subCatId,
+            tags: data.tags || []
+        };
+
+    } catch (error) {
+        console.error("Gemini analysis failed:", error);
+        // Fallback object bij error
+        return {
+            summary: "Fout bij automatische analyse.",
+            mainCategoryId: "strategy",
+            subCategoryId: "yearplan",
+            tags: ["Error"]
+        };
+    }
+};
+
+// 4. De Chat Functie (Vraag het Gemini)
+export const askKnowledgeBase = async (question, documents) => {
+    if (!genAI) return { answer: "Configureer de API key.", citedIds: [] };
+
+    try {
+        [cite_start]// Context opbouwen met documenten [cite: 1569-1570]
+        const context = `
+      Je bent de AI Kennisbank assistent van Richting.nl.
+      Beantwoord de vraag op basis van de bronnen.
+      
+      BELANGRIJK:
+      - Citeer je bronnen door de titel te noemen.
+      - Wees professioneel, direct en behulpzaam.
+      - Als het antwoord niet in de bronnen staat, geef dit aan.
+      
+      BRONNEN:
+      ${documents.filter(doc => !doc.isArchived).slice(0, 15).map(doc => `ID: ${doc.id}
+TITEL: ${doc.title}
+CATEGORIE: ${doc.mainCategoryId}
+INHOUD: ${doc.content.substring(0, 800)}
+---`).join("\n")}
+      
+      VRAAG:
+      ${question}
+    `;
+
+        const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+        const result = await model.generateContent(context);
+        const response = await result.response;
+
+        return {
+            answer: response.text() || "Geen antwoord.",
+            citedIds: [] // Citations zou je hier nog complexer kunnen parsen als je wilt
+        };
+    } catch (error) {
+        return {
+            answer: "Excuses, ik kan de vraag niet verwerken.",
+            citedIds: []
+        };
+    }
+};
