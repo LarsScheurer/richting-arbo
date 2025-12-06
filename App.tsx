@@ -2449,6 +2449,373 @@ const UploadView = ({ user, onUploadComplete }: { user: User, onUploadComplete: 
 };
 
 // --- SETTINGS VIEW ---
+// --- REGIO VIEW ---
+const RegioView = ({ user }: { user: User }) => {
+  const [richtingLocaties, setRichtingLocaties] = useState<RichtingLocatie[]>([]);
+  const [customers, setCustomers] = useState<Customer[]>([]);
+  const [allLocations, setAllLocations] = useState<Location[]>([]);
+  const [selectedRegio, setSelectedRegio] = useState<string | null>(null);
+  const [selectedVestiging, setSelectedVestiging] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const loadData = async () => {
+      setLoading(true);
+      try {
+        const [locaties, klanten] = await Promise.all([
+          richtingLocatiesService.getAllLocaties(),
+          customerService.getCustomersForUser(user.id, user.role)
+        ]);
+        setRichtingLocaties(locaties);
+        setCustomers(klanten);
+
+        // Haal alle klant locaties op
+        const allCustomerLocations: Location[] = [];
+        for (const customer of klanten) {
+          const locs = await customerService.getLocations(customer.id);
+          allCustomerLocations.push(...locs);
+        }
+        setAllLocations(allCustomerLocations);
+      } catch (error) {
+        console.error("Error loading regio data:", error);
+      } finally {
+        setLoading(false);
+      }
+    };
+    loadData();
+  }, [user]);
+
+  // Groepeer Richting locaties per regio
+  const locatiesPerRegio = useMemo(() => {
+    const grouped: Record<string, RichtingLocatie[]> = {};
+    richtingLocaties.forEach(loc => {
+      if (!grouped[loc.regio]) {
+        grouped[loc.regio] = [];
+      }
+      grouped[loc.regio].push(loc);
+    });
+    return grouped;
+  }, [richtingLocaties]);
+
+  // Match klanten met regio's/vestigingen op basis van hun locaties
+  const klantenPerRegio = useMemo(() => {
+    const grouped: Record<string, { customer: Customer, vestiging: string }[]> = {};
+    
+    allLocations.forEach(loc => {
+      if (loc.richtingLocatieId) {
+        const richtingLoc = richtingLocaties.find(rl => rl.id === loc.richtingLocatieId);
+        if (richtingLoc) {
+          const customer = customers.find(c => c.id === loc.customerId);
+          if (customer) {
+            if (!grouped[richtingLoc.regio]) {
+              grouped[richtingLoc.regio] = [];
+            }
+            grouped[richtingLoc.regio].push({
+              customer,
+              vestiging: richtingLoc.vestiging
+            });
+          }
+        }
+      }
+    });
+    
+    return grouped;
+  }, [allLocations, richtingLocaties, customers]);
+
+  // Bereken medewerkers per regio
+  const medewerkersPerRegio = useMemo(() => {
+    const totals: Record<string, number> = {};
+    Object.keys(klantenPerRegio).forEach(regio => {
+      const total = klantenPerRegio[regio].reduce((sum, item) => {
+        return sum + (item.customer.employeeCount || 0);
+      }, 0);
+      totals[regio] = total;
+    });
+    return totals;
+  }, [klantenPerRegio]);
+
+  // Bereken medewerkers per vestiging
+  const medewerkersPerVestiging = useMemo(() => {
+    if (!selectedRegio) return {};
+    const totals: Record<string, number> = {};
+    klantenPerRegio[selectedRegio]?.forEach(item => {
+      if (!totals[item.vestiging]) {
+        totals[item.vestiging] = 0;
+      }
+      totals[item.vestiging] += (item.customer.employeeCount || 0);
+    });
+    return totals;
+  }, [selectedRegio, klantenPerRegio]);
+
+  // Filter klanten op basis van geselecteerde regio/vestiging
+  const filteredKlanten = useMemo(() => {
+    if (!selectedRegio) return [];
+    let filtered = klantenPerRegio[selectedRegio] || [];
+    if (selectedVestiging) {
+      filtered = filtered.filter(item => item.vestiging === selectedVestiging);
+    }
+    return filtered.map(item => item.customer);
+  }, [selectedRegio, selectedVestiging, klantenPerRegio]);
+
+  // Pie chart data: Actieve klanten vs Prospects
+  const pieChartData = useMemo(() => {
+    const actief = customers.filter(c => c.status === 'active').length;
+    const prospect = customers.filter(c => c.status === 'prospect').length;
+    const totaal = actief + prospect;
+    
+    if (totaal === 0) {
+      return { actief: 0, prospect: 0, actiefPercentage: 0, prospectPercentage: 0 };
+    }
+    
+    return {
+      actief,
+      prospect,
+      actiefPercentage: (actief / totaal) * 100,
+      prospectPercentage: (prospect / totaal) * 100
+    };
+  }, [customers]);
+
+  if (loading) {
+    return <div className="text-center py-10 text-gray-500">Laden...</div>;
+  }
+
+  const regioOrder = ['Noord', 'Oost', 'West', 'Zuid West', 'Zuid Oost', 'Midden'];
+
+  return (
+    <div className="space-y-6">
+      <div className="flex justify-between items-center">
+        <h2 className="text-2xl font-bold text-slate-900">Regio & Sales Overzicht</h2>
+      </div>
+
+      {/* Pie Chart: Actieve Klanten vs Prospects */}
+      <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+        <h3 className="text-lg font-bold text-slate-900 mb-4 flex items-center gap-2">
+          <span className="text-2xl">📊</span> Sales & Capaciteit Overzicht
+        </h3>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-8 items-center">
+          {/* Pie Chart */}
+          <div className="flex flex-col items-center">
+            <div className="relative w-64 h-64 mb-4">
+              <svg className="transform -rotate-90 w-64 h-64">
+                <circle
+                  cx="128"
+                  cy="128"
+                  r="100"
+                  fill="none"
+                  stroke="#e5e7eb"
+                  strokeWidth="40"
+                />
+                {pieChartData.actiefPercentage > 0 && (
+                  <circle
+                    cx="128"
+                    cy="128"
+                    r="100"
+                    fill="none"
+                    stroke="#f97316"
+                    strokeWidth="40"
+                    strokeDasharray={`${2 * Math.PI * 100}`}
+                    strokeDashoffset={`${2 * Math.PI * 100 * (1 - pieChartData.actiefPercentage / 100)}`}
+                    className="transition-all duration-500"
+                  />
+                )}
+                {pieChartData.prospectPercentage > 0 && (
+                  <circle
+                    cx="128"
+                    cy="128"
+                    r="100"
+                    fill="none"
+                    stroke="#3b82f6"
+                    strokeWidth="40"
+                    strokeDasharray={`${2 * Math.PI * 100}`}
+                    strokeDashoffset={`${2 * Math.PI * 100 * (1 - pieChartData.prospectPercentage / 100) - (2 * Math.PI * 100 * pieChartData.actiefPercentage / 100)}`}
+                    className="transition-all duration-500"
+                  />
+                )}
+              </svg>
+              <div className="absolute inset-0 flex items-center justify-center">
+                <div className="text-center">
+                  <p className="text-3xl font-bold text-slate-900">{pieChartData.actief + pieChartData.prospect}</p>
+                  <p className="text-sm text-gray-500">Totaal</p>
+                </div>
+              </div>
+            </div>
+            <div className="flex gap-6">
+              <div className="flex items-center gap-2">
+                <div className="w-4 h-4 rounded-full bg-richting-orange"></div>
+                <span className="text-sm text-gray-700">
+                  Actief: <span className="font-bold">{pieChartData.actief}</span> ({pieChartData.actiefPercentage.toFixed(1)}%)
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="w-4 h-4 rounded-full bg-blue-500"></div>
+                <span className="text-sm text-gray-700">
+                  Prospect: <span className="font-bold">{pieChartData.prospect}</span> ({pieChartData.prospectPercentage.toFixed(1)}%)
+                </span>
+              </div>
+            </div>
+          </div>
+
+          {/* Statistieken */}
+          <div className="space-y-4">
+            <div className="bg-orange-50 border-2 border-orange-200 rounded-lg p-4">
+              <p className="text-xs text-gray-600 mb-1">Actieve Klanten</p>
+              <p className="text-3xl font-bold text-richting-orange">{pieChartData.actief}</p>
+              <p className="text-xs text-gray-500 mt-1">Huidige capaciteit in gebruik</p>
+            </div>
+            <div className="bg-blue-50 border-2 border-blue-200 rounded-lg p-4">
+              <p className="text-xs text-gray-600 mb-1">Prospects</p>
+              <p className="text-3xl font-bold text-blue-600">{pieChartData.prospect}</p>
+              <p className="text-xs text-gray-500 mt-1">Potentiële nieuwe klanten</p>
+            </div>
+            <div className="bg-gray-50 border-2 border-gray-200 rounded-lg p-4">
+              <p className="text-xs text-gray-600 mb-1">Totaal Medewerkers</p>
+              <p className="text-3xl font-bold text-slate-900">
+                {customers.reduce((sum, c) => sum + (c.employeeCount || 0), 0).toLocaleString('nl-NL')}
+              </p>
+              <p className="text-xs text-gray-500 mt-1">Alle klanten gecombineerd</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Regio Selectie */}
+      <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+        <h3 className="text-lg font-bold text-slate-900 mb-4 flex items-center gap-2">
+          <span className="text-2xl">🗺️</span> Selecteer Regio
+        </h3>
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+          {regioOrder.map(regio => {
+            const locatiesInRegio = locatiesPerRegio[regio] || [];
+            const klantenInRegio = klantenPerRegio[regio] || [];
+            const medewerkers = medewerkersPerRegio[regio] || 0;
+            const isSelected = selectedRegio === regio;
+            
+            return (
+              <button
+                key={regio}
+                onClick={() => {
+                  setSelectedRegio(isSelected ? null : regio);
+                  setSelectedVestiging(null);
+                }}
+                className={`p-4 rounded-lg border-2 transition-all text-left ${
+                  isSelected
+                    ? 'border-richting-orange bg-orange-50 shadow-md'
+                    : 'border-gray-200 bg-white hover:border-gray-300'
+                }`}
+              >
+                <p className="font-bold text-slate-900 mb-1">{regio}</p>
+                <p className="text-xs text-gray-500 mb-2">{locatiesInRegio.length} vestiging{locatiesInRegio.length !== 1 ? 'en' : ''}</p>
+                <div className="flex items-center justify-between">
+                  <span className="text-xs text-gray-600">{klantenInRegio.length} klant{klantenInRegio.length !== 1 ? 'en' : ''}</span>
+                  <span className="text-xs font-bold text-richting-orange">
+                    {medewerkers.toLocaleString('nl-NL')} medew.
+                  </span>
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Vestiging Selectie (alleen als regio geselecteerd) */}
+      {selectedRegio && (
+        <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+          <h3 className="text-lg font-bold text-slate-900 mb-4 flex items-center gap-2">
+            <span className="text-2xl">📍</span> Vestigingen in {selectedRegio}
+          </h3>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {(locatiesPerRegio[selectedRegio] || []).map(vestiging => {
+              const klantenBijVestiging = (klantenPerRegio[selectedRegio] || [])
+                .filter(item => item.vestiging === vestiging.vestiging)
+                .map(item => item.customer);
+              const medewerkers = medewerkersPerVestiging[vestiging.vestiging] || 0;
+              const isSelected = selectedVestiging === vestiging.vestiging;
+              
+              return (
+                <button
+                  key={vestiging.id}
+                  onClick={() => setSelectedVestiging(isSelected ? null : vestiging.vestiging)}
+                  className={`p-4 rounded-lg border-2 transition-all text-left ${
+                    isSelected
+                      ? 'border-richting-orange bg-orange-50 shadow-md'
+                      : 'border-gray-200 bg-white hover:border-gray-300'
+                  }`}
+                >
+                  <p className="font-bold text-slate-900 mb-1">{vestiging.vestiging}</p>
+                  <p className="text-xs text-gray-500 mb-2 line-clamp-1">{vestiging.volledigAdres}</p>
+                  <div className="flex items-center justify-between mt-2">
+                    <span className="text-xs text-gray-600">{klantenBijVestiging.length} klant{klantenBijVestiging.length !== 1 ? 'en' : ''}</span>
+                    <span className="text-xs font-bold text-richting-orange">
+                      {medewerkers.toLocaleString('nl-NL')} medew.
+                    </span>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Klanten Overzicht (gefilterd op regio/vestiging) */}
+      {selectedRegio && (
+        <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+          <div className="flex justify-between items-center mb-4">
+            <h3 className="text-lg font-bold text-slate-900 flex items-center gap-2">
+              <span className="text-2xl">💼</span> Klanten
+              {selectedVestiging && ` - ${selectedVestiging}`}
+            </h3>
+            <span className="text-sm text-gray-500">
+              {filteredKlanten.length} klant{filteredKlanten.length !== 1 ? 'en' : ''}
+            </span>
+          </div>
+          {filteredKlanten.length === 0 ? (
+            <p className="text-gray-500 text-center py-8">Geen klanten gevonden voor deze selectie.</p>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {filteredKlanten.map(customer => {
+                const logoSrc = customer.logoUrl || (customer.website ? `https://wsrv.nl/?url=${customer.website}&w=100&output=png` : null);
+                return (
+                  <div
+                    key={customer.id}
+                    className="p-4 bg-gray-50 rounded-lg border border-gray-200 hover:border-richting-orange transition-colors"
+                  >
+                    <div className="flex items-start gap-3 mb-3">
+                      <div className="w-12 h-12 rounded-lg bg-white border border-gray-100 flex items-center justify-center overflow-hidden flex-shrink-0">
+                        {logoSrc ? (
+                          <img src={logoSrc} alt={customer.name} className="w-full h-full object-contain p-1" />
+                        ) : (
+                          <div className="w-full h-full bg-gray-50"></div>
+                        )}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="font-bold text-slate-900 text-sm truncate">{customer.name}</p>
+                        <p className="text-xs text-gray-500">{customer.industry}</p>
+                      </div>
+                      <span className={`px-2 py-0.5 rounded text-xs font-bold uppercase flex-shrink-0 ${
+                        customer.status === 'active' ? 'bg-green-100 text-green-700' : 
+                        customer.status === 'prospect' ? 'bg-blue-100 text-blue-700' : 
+                        'bg-gray-100 text-gray-600'
+                      }`}>
+                        {customer.status === 'active' ? 'Actief' : customer.status === 'prospect' ? 'Prospect' : customer.status}
+                      </span>
+                    </div>
+                    {customer.employeeCount && (
+                      <div className="flex items-center gap-2 text-xs text-gray-600">
+                        <span className="font-bold text-richting-orange">{customer.employeeCount.toLocaleString('nl-NL')}</span>
+                        <span>medewerkers</span>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
 const SettingsView = ({ user }: { user: User }) => {
   const [activeTab, setActiveTab] = useState<'autorisatie' | 'promptbeheer' | 'databeheer'>('autorisatie');
   const [users, setUsers] = useState<User[]>([]);
@@ -3148,6 +3515,7 @@ const App = () => {
         />
       )}
       {currentView === 'settings' && <SettingsView user={user} />}
+      {currentView === 'regio' && <RegioView user={user} />}
 
       {/* DOCUMENT MODAL */}
       {selectedDoc && (

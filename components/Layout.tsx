@@ -32,6 +32,7 @@ export const Layout: React.FC<LayoutProps> = ({ children, user, onLogout, curren
   const navItems = [
     { id: 'dashboard', label: 'De Krant', icon: '📰' },
     { id: 'customers', label: 'Klanten', icon: '💼' },
+    { id: 'regio', label: 'Regio & Sales', icon: '🗺️' },
     { id: 'knowledge', label: 'Kennisbank', icon: '📚' },
     { id: 'chat', label: 'Vraag het Gemini', icon: '✨' },
     { id: 'upload', label: 'Nieuwe Bron', icon: '➕' },
