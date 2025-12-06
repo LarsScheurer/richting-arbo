@@ -2877,10 +2877,10 @@ const RegioView = ({ user }: { user: User }) => {
       filtered = filtered.filter(item => item.vestiging === selectedVestiging);
     }
     // Unieke klanten op basis van customer ID
-    const uniqueCustomers = new Map<string, Customer>();
+    const uniqueCustomers = new Map<string, { customer: Customer, location: Location }>();
     filtered.forEach(item => {
       if (!uniqueCustomers.has(item.customer.id)) {
-        uniqueCustomers.set(item.customer.id, item.customer);
+        uniqueCustomers.set(item.customer.id, { customer: item.customer, location: item.location });
       }
     });
     return Array.from(uniqueCustomers.values());
@@ -2904,11 +2904,67 @@ const RegioView = ({ user }: { user: User }) => {
     };
   }, [customers]);
 
+  const handleRelinkAllLocations = async () => {
+    setIsLinkingLocations(true);
+    try {
+      const updatedLocations: Location[] = [];
+      
+      for (const loc of allLocations) {
+        if (loc.city) {
+          // Zoek op basis van stad naam
+          const matchingLocatie = richtingLocaties.find(rl => {
+            const cityLower = loc.city.toLowerCase();
+            const vestigingLower = rl.vestiging.toLowerCase();
+            const adresLower = rl.volledigAdres.toLowerCase();
+            
+            return cityLower.includes(vestigingLower) || 
+                   vestigingLower.includes(cityLower) ||
+                   adresLower.includes(cityLower) ||
+                   cityLower.includes(adresLower.split(',')[0].toLowerCase());
+          });
+          
+          if (matchingLocatie) {
+            const updatedLoc: Location = {
+              ...loc,
+              richtingLocatieId: matchingLocatie.id,
+              richtingLocatieNaam: matchingLocatie.vestiging
+            };
+            // Update in Firestore
+            await customerService.addLocation(updatedLoc);
+            updatedLocations.push(updatedLoc);
+          } else {
+            updatedLocations.push(loc);
+          }
+        } else {
+          updatedLocations.push(loc);
+        }
+      }
+      
+      setAllLocations(updatedLocations);
+      alert(`✅ ${updatedLocations.filter(l => l.richtingLocatieId).length} locaties gekoppeld aan Richting vestigingen.`);
+    } catch (error) {
+      console.error("Error linking locations:", error);
+      alert("Fout bij koppelen van locaties. Probeer het opnieuw.");
+    } finally {
+      setIsLinkingLocations(false);
+    }
+  };
+
   if (loading) {
     return <div className="text-center py-10 text-gray-500">Laden...</div>;
   }
 
   const regioOrder = ['Noord', 'Oost', 'West', 'Zuid West', 'Zuid Oost', 'Midden'];
+  
+  // Debug info
+  console.log('RegioView Debug:', {
+    richtingLocaties: richtingLocaties.length,
+    customers: customers.length,
+    allLocations: allLocations.length,
+    locationsWithRichtingId: allLocations.filter(l => l.richtingLocatieId).length,
+    klantenPerRegio: Object.keys(klantenPerRegio).length,
+    locatiesPerRegio: Object.keys(locatiesPerRegio).length
+  });
 
   return (
     <div className="space-y-6">
@@ -3008,9 +3064,31 @@ const RegioView = ({ user }: { user: User }) => {
             <div className="bg-gray-50 border-2 border-gray-200 rounded-lg p-4">
               <p className="text-xs text-gray-600 mb-1">Totaal Medewerkers</p>
               <p className="text-3xl font-bold text-slate-900">
-                {customers.reduce((sum, c) => sum + (c.employeeCount || 0), 0).toLocaleString('nl-NL')}
+                {(() => {
+                  // Bereken totaal op basis van locatie-specifieke aantallen waar beschikbaar
+                  const totalFromLocations = allLocations.reduce((sum, loc) => {
+                    if (loc.employeeCount !== undefined && loc.employeeCount !== null) {
+                      return sum + loc.employeeCount;
+                    }
+                    return sum;
+                  }, 0);
+                  
+                  // Voeg klanten toe die geen locaties met aantallen hebben
+                  const customersWithoutLocationCounts = customers.filter(c => {
+                    const hasLocationWithCount = allLocations.some(
+                      loc => loc.customerId === c.id && loc.employeeCount !== undefined && loc.employeeCount !== null
+                    );
+                    return !hasLocationWithCount;
+                  });
+                  
+                  const totalFromCustomers = customersWithoutLocationCounts.reduce(
+                    (sum, c) => sum + (c.employeeCount || 0), 0
+                  );
+                  
+                  return (totalFromLocations + totalFromCustomers).toLocaleString('nl-NL');
+                })()}
               </p>
-              <p className="text-xs text-gray-500 mt-1">Alle klanten gecombineerd</p>
+              <p className="text-xs text-gray-500 mt-1">Gebaseerd op locatie-specifieke aantallen</p>
             </div>
           </div>
         </div>
@@ -3021,38 +3099,45 @@ const RegioView = ({ user }: { user: User }) => {
         <h3 className="text-lg font-bold text-slate-900 mb-4 flex items-center gap-2">
           <span className="text-2xl">🗺️</span> Selecteer Regio
         </h3>
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
-          {regioOrder.map(regio => {
-            const locatiesInRegio = locatiesPerRegio[regio] || [];
-            const klantenInRegio = klantenPerRegio[regio] || [];
-            const medewerkers = medewerkersPerRegio[regio] || 0;
-            const isSelected = selectedRegio === regio;
-            
-            return (
-              <button
-                key={regio}
-                onClick={() => {
-                  setSelectedRegio(isSelected ? null : regio);
-                  setSelectedVestiging(null);
-                }}
-                className={`p-4 rounded-lg border-2 transition-all text-left ${
-                  isSelected
-                    ? 'border-richting-orange bg-orange-50 shadow-md'
-                    : 'border-gray-200 bg-white hover:border-gray-300'
-                }`}
-              >
-                <p className="font-bold text-slate-900 mb-1">{regio}</p>
-                <p className="text-xs text-gray-500 mb-2">{locatiesInRegio.length} vestiging{locatiesInRegio.length !== 1 ? 'en' : ''}</p>
-                <div className="flex items-center justify-between">
-                  <span className="text-xs text-gray-600">{klantenInRegio.length} klant{klantenInRegio.length !== 1 ? 'en' : ''}</span>
-                  <span className="text-xs font-bold text-richting-orange">
-                    {medewerkers.toLocaleString('nl-NL')} medew.
-                  </span>
-                </div>
-              </button>
-            );
-          })}
-        </div>
+        {richtingLocaties.length === 0 ? (
+          <div className="text-center py-8 text-gray-500">
+            <p className="mb-2">Geen Richting locaties gevonden.</p>
+            <p className="text-sm">Ga naar Instellingen → Data Beheer om Richting locaties te seeden.</p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+            {regioOrder.map(regio => {
+              const locatiesInRegio = locatiesPerRegio[regio] || [];
+              const klantenInRegio = klantenPerRegio[regio] || [];
+              const medewerkers = medewerkersPerRegio[regio] || 0;
+              const isSelected = selectedRegio === regio;
+              
+              return (
+                <button
+                  key={regio}
+                  onClick={() => {
+                    setSelectedRegio(isSelected ? null : regio);
+                    setSelectedVestiging(null);
+                  }}
+                  className={`p-4 rounded-lg border-2 transition-all text-left ${
+                    isSelected
+                      ? 'border-richting-orange bg-orange-50 shadow-md'
+                      : 'border-gray-200 bg-white hover:border-gray-300'
+                  }`}
+                >
+                  <p className="font-bold text-slate-900 mb-1">{regio}</p>
+                  <p className="text-xs text-gray-500 mb-2">{locatiesInRegio.length} vestiging{locatiesInRegio.length !== 1 ? 'en' : ''}</p>
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs text-gray-600">{klantenInRegio.length} klant{klantenInRegio.length !== 1 ? 'en' : ''}</span>
+                    <span className="text-xs font-bold text-richting-orange">
+                      {medewerkers.toLocaleString('nl-NL')} medew.
+                    </span>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        )}
       </div>
 
       {/* Vestiging Selectie (alleen als regio geselecteerd) */}
@@ -3101,6 +3186,7 @@ const RegioView = ({ user }: { user: User }) => {
             <h3 className="text-lg font-bold text-slate-900 flex items-center gap-2">
               <span className="text-2xl">💼</span> Klanten
               {selectedVestiging && ` - ${selectedVestiging}`}
+              {!selectedVestiging && ` in ${selectedRegio}`}
             </h3>
             <span className="text-sm text-gray-500">
               {filteredKlanten.length} klant{filteredKlanten.length !== 1 ? 'en' : ''}
@@ -3110,24 +3196,50 @@ const RegioView = ({ user }: { user: User }) => {
             <p className="text-gray-500 text-center py-8">Geen klanten gevonden voor deze selectie.</p>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {filteredKlanten.map(customer => {
-                const logoSrc = customer.logoUrl || (customer.website ? `https://wsrv.nl/?url=${customer.website}&w=100&output=png` : null);
+              {filteredKlanten.map(({ customer, location }) => {
+                // Try multiple logo sources
+                const logoSrc = customer.logoUrl || getCompanyLogoUrl(customer.website) || (customer.website ? `https://wsrv.nl/?url=${ensureUrl(customer.website)}&w=128&output=png` : null);
+                const employeeCount = location?.employeeCount || customer.employeeCount;
                 return (
                   <div
                     key={customer.id}
-                    className="p-4 bg-gray-50 rounded-lg border border-gray-200 hover:border-richting-orange transition-colors"
+                    className="p-4 bg-gray-50 rounded-lg border border-gray-200 hover:border-richting-orange transition-colors cursor-pointer"
                   >
                     <div className="flex items-start gap-3 mb-3">
-                      <div className="w-12 h-12 rounded-lg bg-white border border-gray-100 flex items-center justify-center overflow-hidden flex-shrink-0">
+                      <div className="w-16 h-16 rounded-lg bg-white border border-gray-100 flex items-center justify-center overflow-hidden flex-shrink-0 shadow-sm">
                         {logoSrc ? (
-                          <img src={logoSrc} alt={customer.name} className="w-full h-full object-contain p-1" />
+                          <img 
+                            src={logoSrc} 
+                            alt={customer.name} 
+                            className="w-full h-full object-contain p-1"
+                            onError={(e) => {
+                              // Fallback to icon if image fails to load
+                              const img = e.target as HTMLImageElement;
+                              img.style.display = 'none';
+                              const parent = img.parentElement;
+                              if (parent) {
+                                const existingFallback = parent.querySelector('.fallback-icon');
+                                if (!existingFallback) {
+                                  const fallback = document.createElement('div');
+                                  fallback.className = 'w-full h-full bg-gray-50 flex items-center justify-center fallback-icon';
+                                  fallback.innerHTML = '<span class="text-2xl text-gray-400">🏢</span>';
+                                  parent.appendChild(fallback);
+                                }
+                              }
+                            }}
+                          />
                         ) : (
-                          <div className="w-full h-full bg-gray-50"></div>
+                          <div className="w-full h-full bg-gray-50 flex items-center justify-center">
+                            <span className="text-2xl text-gray-400">🏢</span>
+                          </div>
                         )}
                       </div>
                       <div className="flex-1 min-w-0">
-                        <p className="font-bold text-slate-900 text-sm truncate">{customer.name}</p>
-                        <p className="text-xs text-gray-500">{customer.industry}</p>
+                        <p className="font-bold text-slate-900 text-sm mb-1">{customer.name}</p>
+                        <p className="text-xs text-gray-500 mb-1">{customer.industry}</p>
+                        {location && (
+                          <p className="text-xs text-gray-400 italic">{location.name}</p>
+                        )}
                       </div>
                       <span className={`px-2 py-0.5 rounded text-xs font-bold uppercase flex-shrink-0 ${
                         customer.status === 'active' ? 'bg-green-100 text-green-700' : 
@@ -3137,10 +3249,10 @@ const RegioView = ({ user }: { user: User }) => {
                         {customer.status === 'active' ? 'Actief' : customer.status === 'prospect' ? 'Prospect' : customer.status}
                       </span>
                     </div>
-                    {customer.employeeCount && (
-                      <div className="flex items-center gap-2 text-xs text-gray-600">
-                        <span className="font-bold text-richting-orange">{customer.employeeCount.toLocaleString('nl-NL')}</span>
-                        <span>medewerkers</span>
+                    {employeeCount && (
+                      <div className="flex items-center gap-2 text-xs text-gray-600 mt-2 pt-2 border-t border-gray-200">
+                        <span className="font-bold text-richting-orange">{employeeCount.toLocaleString('nl-NL')}</span>
+                        <span>medewerkers{location?.employeeCount ? ` (${location.name})` : ''}</span>
                       </div>
                     )}
                   </div>
