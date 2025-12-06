@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { User, DocumentSource, KNOWLEDGE_STRUCTURE, DocType, GeminiAnalysisResult, ChatMessage, Customer, Location, UserRole, ContactPerson, OrganisatieProfiel, Risico, Proces, Functie } from './types';
 import { authService, dbService, customerService } from './services/firebase';
 import { Layout, RichtingLogo } from './components/Layout';
-import { analyzeContent, askQuestion } from './services/geminiService';
+import { analyzeContent, askQuestion, analyzeOrganisatieBranche, analyzeCultuur } from './services/geminiService';
 
 // --- ICONS ---
 const EyeIcon = () => <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></svg>;
@@ -321,6 +321,10 @@ const CustomerDetailView = ({
   const [isAddingLoc, setIsAddingLoc] = useState(false);
   const [isAddingContact, setIsAddingContact] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [isAnalyzingOrganisatie, setIsAnalyzingOrganisatie] = useState(false);
+  const [isAnalyzingCultuur, setIsAnalyzingCultuur] = useState(false);
+  const [organisatieAnalyseResultaat, setOrganisatieAnalyseResultaat] = useState<string | null>(null);
+  const [cultuurAnalyseResultaat, setCultuurAnalyseResultaat] = useState<string | null>(null);
   
   // New Location Form
   const [locName, setLocName] = useState('');
@@ -584,10 +588,74 @@ const CustomerDetailView = ({
        </div>
 
        {/* ORGANISATIE ANALYSE SECTION */}
-       {organisatieProfiel && (
-         <div className="pt-8 border-t border-gray-200">
-           <h3 className="font-bold text-slate-900 mb-4 text-lg">Organisatie Analyse</h3>
-           <p className="text-sm text-gray-500 mb-4">Analyse datum: {new Date(organisatieProfiel.analyseDatum).toLocaleDateString('nl-NL')}</p>
+       <div className="pt-8 border-t border-gray-200">
+         <div className="flex justify-between items-center mb-4">
+           <h3 className="font-bold text-slate-900 text-lg">Organisatie Analyse</h3>
+           <div className="flex gap-2">
+             <button
+               onClick={async () => {
+                 setIsAnalyzingOrganisatie(true);
+                 setOrganisatieAnalyseResultaat(null);
+                 try {
+                   const result = await analyzeOrganisatieBranche(
+                     customer.name,
+                     customer.industry,
+                     customer.website,
+                     customer.employeeCount
+                   );
+                   setOrganisatieAnalyseResultaat(result);
+                 } catch (error) {
+                   console.error("Organisatie analyse error:", error);
+                   setOrganisatieAnalyseResultaat("Fout bij analyse. Probeer het opnieuw.");
+                 } finally {
+                   setIsAnalyzingOrganisatie(false);
+                 }
+               }}
+               disabled={isAnalyzingOrganisatie}
+               className="bg-richting-orange text-white px-4 py-2 rounded-lg text-sm font-bold hover:bg-orange-600 disabled:opacity-50 transition-colors flex items-center gap-2"
+             >
+               {isAnalyzingOrganisatie ? "⏳ Analyseren..." : "📊 Branche Analyse"}
+             </button>
+             <button
+               onClick={async () => {
+                 setIsAnalyzingCultuur(true);
+                 setCultuurAnalyseResultaat(null);
+                 try {
+                   const result = await analyzeCultuur(customer.name, customer.industry, docs);
+                   setCultuurAnalyseResultaat(result);
+                 } catch (error) {
+                   console.error("Cultuur analyse error:", error);
+                   setCultuurAnalyseResultaat("Fout bij analyse. Probeer het opnieuw.");
+                 } finally {
+                   setIsAnalyzingCultuur(false);
+                 }
+               }}
+               disabled={isAnalyzingCultuur}
+               className="bg-slate-700 text-white px-4 py-2 rounded-lg text-sm font-bold hover:bg-slate-600 disabled:opacity-50 transition-colors flex items-center gap-2"
+             >
+               {isAnalyzingCultuur ? "⏳ Analyseren..." : "🎭 Cultuur Analyse"}
+             </button>
+           </div>
+         </div>
+
+         {/* Analyse Resultaten */}
+         {organisatieAnalyseResultaat && (
+           <div className="bg-orange-50 border border-orange-200 rounded-lg p-4 mb-4">
+             <h4 className="font-bold text-richting-orange mb-2 flex items-center gap-2">📊 Branche Analyse Resultaat</h4>
+             <p className="text-sm text-gray-700 whitespace-pre-wrap">{organisatieAnalyseResultaat}</p>
+           </div>
+         )}
+
+         {cultuurAnalyseResultaat && (
+           <div className="bg-slate-50 border border-slate-200 rounded-lg p-4 mb-4">
+             <h4 className="font-bold text-slate-700 mb-2 flex items-center gap-2">🎭 Cultuur Analyse Resultaat</h4>
+             <p className="text-sm text-gray-700 whitespace-pre-wrap">{cultuurAnalyseResultaat}</p>
+           </div>
+         )}
+
+         {organisatieProfiel && (
+           <>
+             <p className="text-sm text-gray-500 mb-4">Analyse datum: {new Date(organisatieProfiel.analyseDatum).toLocaleDateString('nl-NL')}</p>
            
            {/* Processen en Functies Overzicht */}
            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
@@ -898,8 +966,9 @@ const CustomerDetailView = ({
                </div>
              </div>
            )}
-         </div>
-       )}
+           </>
+         )}
+       </div>
 
        {/* DOCUMENTS SECTION */}
        <div className="pt-8 border-t border-gray-200">
