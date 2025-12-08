@@ -349,16 +349,112 @@ const CustomerDetailView = ({
 
   useEffect(() => {
     const loadData = async () => {
-       const [locs, conts, documents, profiel] = await Promise.all([
-          customerService.getLocations(customer.id),
-          customerService.getContactPersons(customer.id),
-          dbService.getDocumentsForCustomer(customer.id),
-          customerService.getOrganisatieProfiel(customer.id)
-       ]);
-       setLocations(locs);
-       setContacts(conts);
-       setDocs(documents);
-       setOrganisatieProfiel(profiel);
+       try {
+         // Laad basis data (zonder organisatieProfiel om index error te vermijden)
+         const [locs, conts, documents] = await Promise.all([
+            customerService.getLocations(customer.id),
+            customerService.getContactPersons(customer.id),
+            dbService.getDocumentsForCustomer(customer.id)
+         ]);
+         
+         // Laad organisatie profiel apart (met error handling)
+         let profiel = null;
+         try {
+           profiel = await customerService.getOrganisatieProfiel(customer.id);
+         } catch (e) {
+           console.warn("Could not load organisatie profiel (index may be missing):", e);
+         }
+         
+         // Koppel locaties zonder richtingLocatieId aan dichtstbijzijnde Richting locatie
+         try {
+           const allRichtingLocaties = await richtingLocatiesService.getAllLocaties();
+           const updatedLocations: Location[] = [];
+           let linkedCount = 0;
+           
+           for (const loc of locs) {
+             if (!loc.richtingLocatieId && loc.city) {
+               // Verbeterde matching logica
+               const matchingLocatie = allRichtingLocaties.find(rl => {
+                 const cityLower = loc.city.toLowerCase().trim();
+                 const vestigingLower = rl.vestiging.toLowerCase().trim();
+                 const adresLower = rl.volledigAdres.toLowerCase();
+                 
+                 // Exacte match op stad naam
+                 if (cityLower === vestigingLower) return true;
+                 
+                 // Stad naam bevat vestiging naam of vice versa
+                 if (cityLower.includes(vestigingLower) || vestigingLower.includes(cityLower)) return true;
+                 
+                 // Stad naam in adres
+                 if (adresLower.includes(cityLower)) return true;
+                 
+                 // Vestiging naam in adres van locatie
+                 if (loc.address && loc.address.toLowerCase().includes(vestigingLower)) return true;
+                 
+                 // Speciale gevallen
+                 const specialCases: Record<string, string[]> = {
+                   'den haag': ['s-gravenhage', 'gravenhage'],
+                   'den bosch': ['s-hertogenbosch', 'hertogenbosch', "'s-hertogenbosch"],
+                   'capelle aan den ijssel': ['capelle'],
+                   'capelle a/d ijssel': ['capelle'],
+                   'amsterdam': ['amsterdam'],
+                   'zoeterwoude': ['zoetermeer', 'den haag'], // Zoeterwoude is dichtbij Zoetermeer/Den Haag
+                   'hazerswoude-rijndijk': ['zoetermeer', 'den haag'],
+                   'wijlre': ['venlo', 'maastricht'] // Wijlre is in Limburg
+                 };
+                 
+                 for (const [key, aliases] of Object.entries(specialCases)) {
+                   if (cityLower.includes(key) || key.includes(cityLower)) {
+                     if (aliases.some(alias => vestigingLower.includes(alias) || adresLower.includes(alias))) {
+                       return true;
+                     }
+                   }
+                 }
+                 
+                 return false;
+               });
+               
+               if (matchingLocatie) {
+                 const updatedLoc: Location = {
+                   ...loc,
+                   richtingLocatieId: matchingLocatie.id,
+                   richtingLocatieNaam: matchingLocatie.vestiging
+                 };
+                 // Update in Firestore
+                 try {
+                   await customerService.addLocation(updatedLoc);
+                   updatedLocations.push(updatedLoc);
+                   linkedCount++;
+                   console.log(`✅ Locatie "${loc.name}" (${loc.city}) gekoppeld aan ${matchingLocatie.vestiging}`);
+                 } catch (e) {
+                   console.error(`Error updating location ${loc.id}:`, e);
+                   updatedLocations.push(loc);
+                 }
+               } else {
+                 console.log(`⚠️ Geen match gevonden voor locatie "${loc.name}" in ${loc.city}`);
+                 updatedLocations.push(loc);
+               }
+             } else {
+               updatedLocations.push(loc);
+             }
+           }
+           
+           if (linkedCount > 0) {
+             console.log(`✅ ${linkedCount} locaties automatisch gekoppeld`);
+           }
+           
+           setLocations(updatedLocations);
+         } catch (e) {
+           console.error("Error linking locations:", e);
+           setLocations(locs); // Gebruik originele locaties als koppeling faalt
+         }
+         
+         setContacts(conts);
+         setDocs(documents);
+         setOrganisatieProfiel(profiel);
+       } catch (error) {
+         console.error("Error loading customer data:", error);
+       }
     };
     loadData();
   }, [customer]);
@@ -383,11 +479,44 @@ const CustomerDetailView = ({
     // This is a fallback - ideally we'd use coordinates
     try {
       const allRichtingLocaties = await richtingLocatiesService.getAllLocaties();
-      // Simple city name matching as fallback
-      const matchingLocatie = allRichtingLocaties.find(rl => 
-        rl.vestiging.toLowerCase().includes(locCity.toLowerCase()) ||
-        locCity.toLowerCase().includes(rl.vestiging.toLowerCase())
-      );
+      // Verbeterde matching logica (zelfde als in RegioView)
+      const matchingLocatie = allRichtingLocaties.find(rl => {
+        if (!locCity) return false;
+        
+        const cityLower = locCity.toLowerCase().trim();
+        const vestigingLower = rl.vestiging.toLowerCase().trim();
+        const adresLower = rl.volledigAdres.toLowerCase();
+        
+        // Exacte match op stad naam
+        if (cityLower === vestigingLower) return true;
+        
+        // Stad naam bevat vestiging naam of vice versa
+        if (cityLower.includes(vestigingLower) || vestigingLower.includes(cityLower)) return true;
+        
+        // Stad naam in adres
+        if (adresLower.includes(cityLower)) return true;
+        
+        // Vestiging naam in adres van locatie
+        if (locAddress && locAddress.toLowerCase().includes(vestigingLower)) return true;
+        
+        // Speciale gevallen
+        const specialCases: Record<string, string[]> = {
+          'den haag': ['s-gravenhage', 'gravenhage'],
+          'den bosch': ['s-hertogenbosch', 'hertogenbosch', "'s-hertogenbosch"],
+          'capelle aan den ijssel': ['capelle'],
+          'capelle a/d ijssel': ['capelle']
+        };
+        
+        for (const [key, aliases] of Object.entries(specialCases)) {
+          if (cityLower.includes(key) || key.includes(cityLower)) {
+            if (aliases.some(alias => vestigingLower.includes(alias) || adresLower.includes(alias))) {
+              return true;
+            }
+          }
+        }
+        
+        return false;
+      });
       
       if (matchingLocatie) {
         newLoc.richtingLocatieId = matchingLocatie.id;
@@ -616,12 +745,16 @@ const CustomerDetailView = ({
                               <span className="text-xs text-gray-400 italic">👥 Geen medewerkersaantal opgegeven</span>
                             </div>
                           )}
-                          {loc.richtingLocatieNaam && (
-                            <div className="mt-2 flex items-center gap-1">
-                              <span className="text-xs text-richting-orange font-medium">📍 Dichtstbijzijnde Richting:</span>
-                              <span className="text-xs text-slate-700 font-semibold">{loc.richtingLocatieNaam}</span>
-                            </div>
-                          )}
+                          <div className="mt-2 flex items-center gap-1">
+                            {loc.richtingLocatieNaam ? (
+                              <>
+                                <span className="text-xs text-richting-orange font-medium">📍 Dichtstbijzijnde Richting:</span>
+                                <span className="text-xs text-slate-700 font-semibold">{loc.richtingLocatieNaam}</span>
+                              </>
+                            ) : (
+                              <span className="text-xs text-gray-400 italic">📍 Richting vestiging wordt gekoppeld...</span>
+                            )}
+                          </div>
                        </div>
                        <div className="flex items-center gap-1">
                          <button
@@ -869,22 +1002,37 @@ const CustomerDetailView = ({
                  try {
                    // Use Firebase Function to get active prompt from Firestore
                    const functionsUrl = 'https://europe-west4-richting-sales-d764a.cloudfunctions.net/analyseBranche';
+                   
+                   // Validate required data
+                   if (!customer.name) {
+                     throw new Error('Organisatienaam is verplicht');
+                   }
+                   
+                   const requestBody = { 
+                     organisatieNaam: customer.name,
+                     website: customer.website || ''
+                   };
+                   
+                   console.log('📤 Calling analyseBranche with:', requestBody);
+                   
                    const response = await fetch(functionsUrl, {
                      method: 'POST',
                      headers: {
                        'Content-Type': 'application/json',
                      },
-                     body: JSON.stringify({ 
-                       organisatieNaam: customer.name,
-                       website: customer.website || ''
-                     })
+                     body: JSON.stringify(requestBody)
                    });
 
+                   console.log('📥 Response status:', response.status, response.statusText);
+
                    if (!response.ok) {
-                     throw new Error(`HTTP error! status: ${response.status}`);
+                     const errorText = await response.text();
+                     console.error('❌ HTTP error response:', errorText);
+                     throw new Error(`HTTP error! status: ${response.status} - ${errorText.substring(0, 200)}`);
                    }
 
                    const data = await response.json();
+                   console.log('✅ Received data from function:', Object.keys(data));
                    
                    // The Firebase Function returns JSON with the full analysis
                    // Convert to markdown format for display
@@ -971,10 +1119,11 @@ const CustomerDetailView = ({
                        console.error("Error saving organisatie profiel:", saveError);
                      }
                    }
-                 } catch (error) {
+                 } catch (error: any) {
                    clearInterval(stepInterval);
-                   console.error("Organisatie analyse error:", error);
-                   setOrganisatieAnalyseResultaat("Fout bij analyse. Probeer het opnieuw.");
+                   console.error("❌ Organisatie analyse error:", error);
+                   const errorMessage = error.message || 'Onbekende fout';
+                   setOrganisatieAnalyseResultaat(`❌ Fout bij analyse: ${errorMessage}\n\nControleer de browser console voor meer details.`);
                    setAnalyseStap(0);
                  } finally {
                    setIsAnalyzingOrganisatie(false);
@@ -2733,18 +2882,48 @@ const RegioView = ({ user }: { user: User }) => {
         
         // Koppel locaties zonder richtingLocatieId aan dichtstbijzijnde Richting locatie
         const updatedLocations: Location[] = [];
+        let linkedCount = 0;
+        
         for (const loc of allCustomerLocations) {
           if (!loc.richtingLocatieId && loc.city) {
-            // Zoek op basis van stad naam
+            // Verbeterde matching logica
             const matchingLocatie = locaties.find(rl => {
-              const cityLower = loc.city.toLowerCase();
-              const vestigingLower = rl.vestiging.toLowerCase();
+              const cityLower = loc.city.toLowerCase().trim();
+              const vestigingLower = rl.vestiging.toLowerCase().trim();
               const adresLower = rl.volledigAdres.toLowerCase();
               
-              return cityLower.includes(vestigingLower) || 
-                     vestigingLower.includes(cityLower) ||
-                     adresLower.includes(cityLower) ||
-                     cityLower.includes(adresLower.split(',')[0].toLowerCase());
+              // Exacte match op stad naam
+              if (cityLower === vestigingLower) return true;
+              
+              // Stad naam bevat vestiging naam of vice versa
+              if (cityLower.includes(vestigingLower) || vestigingLower.includes(cityLower)) return true;
+              
+              // Stad naam in adres
+              if (adresLower.includes(cityLower)) return true;
+              
+              // Vestiging naam in adres van locatie (als beschikbaar)
+              if (loc.address && loc.address.toLowerCase().includes(vestigingLower)) return true;
+              
+              // Speciale gevallen: "Den Haag" = "s-Gravenhage, "s-Hertogenbosch = Den Bosch, etc.
+              const specialCases: Record<string, string[]> = {
+                'den haag': ['s-gravenhage', 'gravenhage'],
+                'den bosch': ['s-hertogenbosch', 'hertogenbosch', "'s-hertogenbosch"],
+                'capelle aan den ijssel': ['capelle'],
+                'capelle a/d ijssel': ['capelle'],
+                'amsterdam': ['amsterdam'],
+                'rotterdam': ['rotterdam'],
+                'utrecht': ['utrecht']
+              };
+              
+              for (const [key, aliases] of Object.entries(specialCases)) {
+                if (cityLower.includes(key) || key.includes(cityLower)) {
+                  if (aliases.some(alias => vestigingLower.includes(alias) || adresLower.includes(alias))) {
+                    return true;
+                  }
+                }
+              }
+              
+              return false;
             });
             
             if (matchingLocatie) {
@@ -2756,12 +2935,17 @@ const RegioView = ({ user }: { user: User }) => {
               // Update in Firestore
               await customerService.addLocation(updatedLoc);
               updatedLocations.push(updatedLoc);
+              linkedCount++;
             } else {
               updatedLocations.push(loc);
             }
           } else {
             updatedLocations.push(loc);
           }
+        }
+        
+        if (linkedCount > 0) {
+          console.log(`✅ Automatisch ${linkedCount} locaties gekoppeld aan Richting vestigingen`);
         }
         
         setAllLocations(updatedLocations);
@@ -2814,27 +2998,41 @@ const RegioView = ({ user }: { user: User }) => {
   }, [allLocations, richtingLocaties, customers]);
 
   // Bereken medewerkers per regio (gebruik locatie-specifieke aantallen)
+  // Belangrijk: tel elke locatie maar één keer mee per regio
   const medewerkersPerRegio = useMemo(() => {
     const totals: Record<string, number> = {};
+    
     Object.keys(klantenPerRegio).forEach(regio => {
+      const processedLocationIds = new Set<string>(); // Track welke locaties al zijn geteld in deze regio
+      const processedCustomerIds = new Set<string>(); // Track welke klanten al zijn geteld (voor fallback)
+      
       const total = klantenPerRegio[regio].reduce((sum, item) => {
+        // Elke locatie mag maar één keer worden geteld per regio
+        if (processedLocationIds.has(item.location.id)) {
+          return sum;
+        }
+        processedLocationIds.add(item.location.id);
+        
         // Gebruik locatie-specifiek aantal als beschikbaar
         if (item.location.employeeCount !== undefined && item.location.employeeCount !== null) {
           return sum + item.location.employeeCount;
         }
-        // Als locatie geen aantal heeft, gebruik klant totaal (maar alleen één keer per klant per regio)
-        // Om dubbele telling te voorkomen, tellen we alleen de eerste locatie van een klant in een regio
-        const isFirstLocationForCustomer = klantenPerRegio[regio].findIndex(
-          i => i.customer.id === item.customer.id && i.location.id === item.location.id
-        ) === klantenPerRegio[regio].findIndex(i => i.customer.id === item.customer.id);
         
-        if (isFirstLocationForCustomer) {
+        // Als locatie geen aantal heeft, gebruik klant totaal (maar alleen één keer per klant in deze regio)
+        if (!processedCustomerIds.has(item.customer.id)) {
+          processedCustomerIds.add(item.customer.id);
           return sum + (item.customer.employeeCount || 0);
         }
+        
+        // Deze locatie heeft geen aantal en de klant is al geteld, tel 0
         return sum;
       }, 0);
       totals[regio] = total;
     });
+    
+    // Debug per regio
+    console.log('Medewerkers per regio:', totals);
+    
     return totals;
   }, [klantenPerRegio]);
 
@@ -2908,19 +3106,45 @@ const RegioView = ({ user }: { user: User }) => {
     setIsLinkingLocations(true);
     try {
       const updatedLocations: Location[] = [];
+      let linkedCount = 0;
       
       for (const loc of allLocations) {
-        if (loc.city) {
-          // Zoek op basis van stad naam
+        if (!loc.richtingLocatieId && loc.city) {
+          // Verbeterde matching logica (zelfde als in useEffect)
           const matchingLocatie = richtingLocaties.find(rl => {
-            const cityLower = loc.city.toLowerCase();
-            const vestigingLower = rl.vestiging.toLowerCase();
+            const cityLower = loc.city.toLowerCase().trim();
+            const vestigingLower = rl.vestiging.toLowerCase().trim();
             const adresLower = rl.volledigAdres.toLowerCase();
             
-            return cityLower.includes(vestigingLower) || 
-                   vestigingLower.includes(cityLower) ||
-                   adresLower.includes(cityLower) ||
-                   cityLower.includes(adresLower.split(',')[0].toLowerCase());
+            // Exacte match op stad naam
+            if (cityLower === vestigingLower) return true;
+            
+            // Stad naam bevat vestiging naam of vice versa
+            if (cityLower.includes(vestigingLower) || vestigingLower.includes(cityLower)) return true;
+            
+            // Stad naam in adres
+            if (adresLower.includes(cityLower)) return true;
+            
+            // Vestiging naam in adres van locatie (als beschikbaar)
+            if (loc.address && loc.address.toLowerCase().includes(vestigingLower)) return true;
+            
+            // Speciale gevallen
+            const specialCases: Record<string, string[]> = {
+              'den haag': ['s-gravenhage', 'gravenhage'],
+              'den bosch': ['s-hertogenbosch', 'hertogenbosch', "'s-hertogenbosch"],
+              'capelle aan den ijssel': ['capelle'],
+              'capelle a/d ijssel': ['capelle']
+            };
+            
+            for (const [key, aliases] of Object.entries(specialCases)) {
+              if (cityLower.includes(key) || key.includes(cityLower)) {
+                if (aliases.some(alias => vestigingLower.includes(alias) || adresLower.includes(alias))) {
+                  return true;
+                }
+              }
+            }
+            
+            return false;
           });
           
           if (matchingLocatie) {
@@ -2932,6 +3156,7 @@ const RegioView = ({ user }: { user: User }) => {
             // Update in Firestore
             await customerService.addLocation(updatedLoc);
             updatedLocations.push(updatedLoc);
+            linkedCount++;
           } else {
             updatedLocations.push(loc);
           }
@@ -2941,7 +3166,7 @@ const RegioView = ({ user }: { user: User }) => {
       }
       
       setAllLocations(updatedLocations);
-      alert(`✅ ${updatedLocations.filter(l => l.richtingLocatieId).length} locaties gekoppeld aan Richting vestigingen.`);
+      alert(`✅ ${linkedCount} locaties gekoppeld aan Richting vestigingen.`);
     } catch (error) {
       console.error("Error linking locations:", error);
       alert("Fout bij koppelen van locaties. Probeer het opnieuw.");
@@ -2957,13 +3182,16 @@ const RegioView = ({ user }: { user: User }) => {
   const regioOrder = ['Noord', 'Oost', 'West', 'Zuid West', 'Zuid Oost', 'Midden'];
   
   // Debug info
+  const somVanRegios = Object.values(medewerkersPerRegio).reduce((sum, val) => sum + val, 0);
   console.log('RegioView Debug:', {
     richtingLocaties: richtingLocaties.length,
     customers: customers.length,
     allLocations: allLocations.length,
     locationsWithRichtingId: allLocations.filter(l => l.richtingLocatieId).length,
     klantenPerRegio: Object.keys(klantenPerRegio).length,
-    locatiesPerRegio: Object.keys(locatiesPerRegio).length
+    locatiesPerRegio: Object.keys(locatiesPerRegio).length,
+    medewerkersPerRegio,
+    somVanRegios
   });
 
   return (
@@ -3065,27 +3293,53 @@ const RegioView = ({ user }: { user: User }) => {
               <p className="text-xs text-gray-600 mb-1">Totaal Medewerkers</p>
               <p className="text-3xl font-bold text-slate-900">
                 {(() => {
-                  // Bereken totaal op basis van locatie-specifieke aantallen waar beschikbaar
-                  const totalFromLocations = allLocations.reduce((sum, loc) => {
-                    if (loc.employeeCount !== undefined && loc.employeeCount !== null) {
-                      return sum + loc.employeeCount;
+                  // Eenvoudigere en correctere logica: tel alle medewerkers per klant
+                  // Voor elke klant: tel locatie-specifieke aantallen, of gebruik customer.employeeCount als fallback
+                  const total = customers.reduce((sum, customer) => {
+                    const customerLocations = allLocations.filter(loc => loc.customerId === customer.id);
+                    
+                    // Als klant locaties heeft
+                    if (customerLocations.length > 0) {
+                      // Tel alle locaties met employeeCount
+                      const totalFromLocations = customerLocations.reduce((locSum, loc) => {
+                        if (loc.employeeCount !== undefined && loc.employeeCount !== null) {
+                          return locSum + loc.employeeCount;
+                        }
+                        return locSum;
+                      }, 0);
+                      
+                      // Als er locaties zijn zonder employeeCount, gebruik customer.employeeCount als fallback
+                      // Maar alleen als er geen locaties met employeeCount zijn (om dubbele telling te voorkomen)
+                      const hasLocationsWithCount = customerLocations.some(
+                        loc => loc.employeeCount !== undefined && loc.employeeCount !== null
+                      );
+                      
+                      if (hasLocationsWithCount) {
+                        // Gebruik alleen locatie-specifieke aantallen
+                        return sum + totalFromLocations;
+                      } else {
+                        // Geen locaties met aantallen, gebruik customer.employeeCount
+                        return sum + (customer.employeeCount || 0);
+                      }
+                    } else {
+                      // Klant heeft geen locaties, gebruik customer.employeeCount
+                      return sum + (customer.employeeCount || 0);
                     }
-                    return sum;
                   }, 0);
                   
-                  // Voeg klanten toe die geen locaties met aantallen hebben
-                  const customersWithoutLocationCounts = customers.filter(c => {
-                    const hasLocationWithCount = allLocations.some(
-                      loc => loc.customerId === c.id && loc.employeeCount !== undefined && loc.employeeCount !== null
-                    );
-                    return !hasLocationWithCount;
+                  // Debug: log de berekening
+                  const totalFromRegios = Object.values(medewerkersPerRegio).reduce((s, val) => s + val, 0);
+                  console.log('Totaal Medewerkers berekening:', {
+                    total,
+                    totalFromRegios,
+                    verschil: total - totalFromRegios,
+                    allLocationsCount: allLocations.length,
+                    locationsWithRichtingId: allLocations.filter(l => l.richtingLocatieId).length,
+                    locationsWithoutRichtingId: allLocations.filter(l => !l.richtingLocatieId).length,
+                    customersCount: customers.length
                   });
                   
-                  const totalFromCustomers = customersWithoutLocationCounts.reduce(
-                    (sum, c) => sum + (c.employeeCount || 0), 0
-                  );
-                  
-                  return (totalFromLocations + totalFromCustomers).toLocaleString('nl-NL');
+                  return total.toLocaleString('nl-NL');
                 })()}
               </p>
               <p className="text-xs text-gray-500 mt-1">Gebaseerd op locatie-specifieke aantallen</p>
@@ -3429,6 +3683,28 @@ const SettingsView = ({ user }: { user: User }) => {
     setShowPromptEditor(true);
   };
 
+  const handleDeletePrompt = async (promptId: string) => {
+    if (!window.confirm('Weet je zeker dat je deze prompt wilt verwijderen? Deze actie kan niet ongedaan worden gemaakt.')) {
+      return;
+    }
+
+    try {
+      await promptService.deletePrompt(promptId);
+      const updatedPrompts = await promptService.getPrompts();
+      setPrompts(updatedPrompts);
+      if (selectedPrompt && selectedPrompt.id === promptId) {
+        setShowPromptEditor(false);
+        setSelectedPrompt(null);
+        setPromptName('');
+        setPromptContent('');
+      }
+      alert('Prompt verwijderd!');
+    } catch (error) {
+      console.error("Error deleting prompt:", error);
+      alert("Fout bij het verwijderen van de prompt. Probeer het opnieuw.");
+    }
+  };
+
   if (loading) {
     return <div className="text-center py-10 text-gray-500">Laden...</div>;
   }
@@ -3509,13 +3785,22 @@ const SettingsView = ({ user }: { user: User }) => {
         <div className="space-y-6">
           <div className="flex justify-between items-center">
             <h3 className="text-lg font-bold text-slate-900">Prompts</h3>
-            <button
-              onClick={handleNewPrompt}
-              className="bg-richting-orange text-white px-4 py-2 rounded-lg font-bold hover:bg-orange-600 transition-colors"
-            >
-              + Nieuwe Prompt
-            </button>
+            {user.role === UserRole.ADMIN && (
+              <button
+                onClick={handleNewPrompt}
+                className="bg-richting-orange text-white px-4 py-2 rounded-lg font-bold hover:bg-orange-600 transition-colors"
+              >
+                + Nieuwe Prompt
+              </button>
+            )}
           </div>
+          {user.role !== UserRole.ADMIN && (
+            <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 mb-4">
+              <p className="text-sm text-yellow-800">
+                ⚠️ Alleen administrators kunnen prompts bewerken, activeren of verwijderen.
+              </p>
+            </div>
+          )}
 
           {showPromptEditor ? (
             <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
@@ -3529,7 +3814,8 @@ const SettingsView = ({ user }: { user: User }) => {
                     type="text"
                     value={promptName}
                     onChange={(e) => setPromptName(e.target.value)}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-richting-orange focus:border-richting-orange"
+                    disabled={user.role !== UserRole.ADMIN}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-richting-orange focus:border-richting-orange disabled:bg-gray-100 disabled:cursor-not-allowed"
                     placeholder="Bijv. Branche Analyse Prompt"
                   />
                 </div>
@@ -3538,7 +3824,8 @@ const SettingsView = ({ user }: { user: User }) => {
                   <select
                     value={promptType}
                     onChange={(e) => setPromptType(e.target.value as any)}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-richting-orange focus:border-richting-orange"
+                    disabled={user.role !== UserRole.ADMIN}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-richting-orange focus:border-richting-orange disabled:bg-gray-100 disabled:cursor-not-allowed"
                   >
                     <option value="branche_analyse">Branche Analyse</option>
                     <option value="publiek_cultuur_profiel">Publiek Cultuur Profiel</option>
@@ -3551,11 +3838,12 @@ const SettingsView = ({ user }: { user: User }) => {
                     value={promptContent}
                     onChange={(e) => setPromptContent(e.target.value)}
                     rows={15}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-richting-orange focus:border-richting-orange font-mono text-sm"
+                    disabled={user.role !== UserRole.ADMIN}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-richting-orange focus:border-richting-orange font-mono text-sm disabled:bg-gray-100 disabled:cursor-not-allowed"
                     placeholder="Voer de prompt inhoud in..."
                   />
                 </div>
-                {selectedPrompt && (
+                {selectedPrompt && user.role === UserRole.ADMIN && (
                   <div className="flex items-center gap-2">
                     <input
                       type="checkbox"
@@ -3595,26 +3883,28 @@ const SettingsView = ({ user }: { user: User }) => {
                       {selectedPrompt.files.map(file => (
                         <div key={file.id} className="flex items-center justify-between p-2 bg-gray-50 rounded border">
                           <span className="text-sm text-gray-700">{file.name}</span>
-                          <button
-                            onClick={async () => {
-                              if (selectedPrompt) {
-                                await promptService.deleteFileFromPrompt(selectedPrompt.id, file.id);
-                                const updated = await promptService.getPrompt(selectedPrompt.id);
-                                if (updated) setSelectedPrompt(updated);
-                                const allPrompts = await promptService.getPrompts();
-                                setPrompts(allPrompts);
-                              }
-                            }}
-                            className="text-red-500 hover:text-red-700 text-sm"
-                          >
-                            Verwijderen
-                          </button>
+                          {user.role === UserRole.ADMIN && (
+                            <button
+                              onClick={async () => {
+                                if (selectedPrompt) {
+                                  await promptService.deleteFileFromPrompt(selectedPrompt.id, file.id);
+                                  const updated = await promptService.getPrompt(selectedPrompt.id);
+                                  if (updated) setSelectedPrompt(updated);
+                                  const allPrompts = await promptService.getPrompts();
+                                  setPrompts(allPrompts);
+                                }
+                              }}
+                              className="text-red-500 hover:text-red-700 text-sm"
+                            >
+                              Verwijderen
+                            </button>
+                          )}
                         </div>
                       ))}
                     </div>
                   </div>
                 )}
-                {selectedPrompt && (
+                {selectedPrompt && user.role === UserRole.ADMIN && (
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-2">Bestand Toevoegen</label>
                     <input
@@ -3626,25 +3916,27 @@ const SettingsView = ({ user }: { user: User }) => {
                     {uploadingFile && <p className="text-sm text-gray-500 mt-2">Uploaden...</p>}
                   </div>
                 )}
-                <div className="flex gap-4">
-                  <button
-                    onClick={handleSavePrompt}
-                    className="bg-richting-orange text-white px-6 py-2 rounded-lg font-bold hover:bg-orange-600 transition-colors"
-                  >
-                    Opslaan
-                  </button>
-                  <button
-                    onClick={() => {
-                      setShowPromptEditor(false);
-                      setSelectedPrompt(null);
-                      setPromptName('');
-                      setPromptContent('');
-                    }}
-                    className="bg-gray-200 text-gray-700 px-6 py-2 rounded-lg font-bold hover:bg-gray-300 transition-colors"
-                  >
-                    Annuleren
-                  </button>
-                </div>
+                {user.role === UserRole.ADMIN && (
+                  <div className="flex gap-4">
+                    <button
+                      onClick={handleSavePrompt}
+                      className="bg-richting-orange text-white px-6 py-2 rounded-lg font-bold hover:bg-orange-600 transition-colors"
+                    >
+                      Opslaan
+                    </button>
+                    <button
+                      onClick={() => {
+                        setShowPromptEditor(false);
+                        setSelectedPrompt(null);
+                        setPromptName('');
+                        setPromptContent('');
+                      }}
+                      className="bg-gray-200 text-gray-700 px-6 py-2 rounded-lg font-bold hover:bg-gray-300 transition-colors"
+                    >
+                      Annuleren
+                    </button>
+                  </div>
+                )}
               </div>
             </div>
           ) : (
@@ -3683,22 +3975,30 @@ const SettingsView = ({ user }: { user: User }) => {
                                 )}
                               </p>
                             </div>
-                            <div className="flex gap-2">
-                              {(prompt.type === 'branche_analyse' || prompt.type === 'publiek_cultuur_profiel') && !prompt.isActief && (
+                            {user.role === UserRole.ADMIN && (
+                              <div className="flex gap-2">
+                                {(prompt.type === 'branche_analyse' || prompt.type === 'publiek_cultuur_profiel') && !prompt.isActief && (
+                                  <button
+                                    onClick={() => handleActivatePrompt(prompt.id, prompt.type as 'branche_analyse' | 'publiek_cultuur_profiel')}
+                                    className="bg-green-600 text-white px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-green-700 transition-colors"
+                                  >
+                                    Activeer
+                                  </button>
+                                )}
                                 <button
-                                  onClick={() => handleActivatePrompt(prompt.id, prompt.type as 'branche_analyse' | 'publiek_cultuur_profiel')}
-                                  className="bg-green-600 text-white px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-green-700 transition-colors"
+                                  onClick={() => handleEditPrompt(prompt)}
+                                  className="text-richting-orange hover:text-orange-600 font-bold text-sm px-3 py-1.5"
                                 >
-                                  Activeer
+                                  Bewerken
                                 </button>
-                              )}
-                              <button
-                                onClick={() => handleEditPrompt(prompt)}
-                                className="text-richting-orange hover:text-orange-600 font-bold text-sm px-3 py-1.5"
-                              >
-                                Bewerken
-                              </button>
-                            </div>
+                                <button
+                                  onClick={() => handleDeletePrompt(prompt.id)}
+                                  className="text-red-500 hover:text-red-700 font-bold text-sm px-3 py-1.5"
+                                >
+                                  Verwijderen
+                                </button>
+                              </div>
+                            )}
                           </div>
                           <div className="bg-gray-50 p-4 rounded border border-gray-200">
                             <p className="text-sm text-gray-700 font-mono whitespace-pre-wrap line-clamp-3">

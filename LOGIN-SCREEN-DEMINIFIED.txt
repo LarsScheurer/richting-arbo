@@ -201,3 +201,4 @@ const AuthPage = ({ onLogin, onGoogleLogin, onRegister, onForgot, loading, error
 };
 
 export default AuthPage;
+

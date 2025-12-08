@@ -344,10 +344,30 @@ export const customerService = {
   // Organisatie Profiel
   getOrganisatieProfiel: async (customerId: string): Promise<OrganisatieProfiel | null> => {
     try {
-      const q = query(collection(db, 'organisatieProfielen'), where('customerId', '==', customerId), orderBy('analyseDatum', 'desc'));
-      const snapshot = await getDocs(q);
-      if (snapshot.empty) return null;
-      return { id: snapshot.docs[0].id, ...snapshot.docs[0].data() } as OrganisatieProfiel;
+      // Probeer eerst met orderBy (als index bestaat)
+      try {
+        const q = query(collection(db, 'organisatieProfielen'), where('customerId', '==', customerId), orderBy('analyseDatum', 'desc'));
+        const snapshot = await getDocs(q);
+        if (snapshot.empty) return null;
+        return { id: snapshot.docs[0].id, ...snapshot.docs[0].data() } as OrganisatieProfiel;
+      } catch (orderByError: any) {
+        // Als orderBy faalt (index ontbreekt), probeer zonder orderBy
+        if (orderByError.code === 'failed-precondition') {
+          console.warn("Index missing for organisatieProfielen query, fetching without orderBy");
+          const q = query(collection(db, 'organisatieProfielen'), where('customerId', '==', customerId));
+          const snapshot = await getDocs(q);
+          if (snapshot.empty) return null;
+          // Sorteer handmatig op analyseDatum
+          const docs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as OrganisatieProfiel & { analyseDatum?: any }));
+          docs.sort((a, b) => {
+            const dateA = a.analyseDatum?.toDate?.() || new Date(0);
+            const dateB = b.analyseDatum?.toDate?.() || new Date(0);
+            return dateB.getTime() - dateA.getTime();
+          });
+          return docs[0] as OrganisatieProfiel;
+        }
+        throw orderByError;
+      }
     } catch (e) {
       console.error("Error fetching organisatie profiel:", e);
       return null;
@@ -590,6 +610,16 @@ export const promptService = {
       }
     } catch (e) {
       console.error("Error saving prompt:", e);
+      throw e;
+    }
+  },
+
+  deletePrompt: async (promptId: string): Promise<void> => {
+    try {
+      const docRef = doc(db, 'prompts', promptId);
+      await deleteDoc(docRef);
+    } catch (e) {
+      console.error("Error deleting prompt:", e);
       throw e;
     }
   },

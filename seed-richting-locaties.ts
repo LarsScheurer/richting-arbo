@@ -80,3 +80,4 @@ seedRichtingLocaties()
     process.exit(1);
   });
 
+
