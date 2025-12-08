@@ -874,116 +874,139 @@ Voer nu de analyse uit en geef het resultaat in het gevraagde JSON formaat.`;
             jsonStr = jsonMatch[0];
         }
         // Improved JSON repair: handle unescaped characters in string values more robustly
-        // Strategy: iterate character by character and properly escape control characters inside strings
-        let repaired = '';
-        let inString = false;
-        let escapeNext = false;
-        for (let i = 0; i < jsonStr.length; i++) {
-            const char = jsonStr[i];
-            const charCode = jsonStr.charCodeAt(i);
-            if (escapeNext) {
-                // We're processing an escaped character
-                // Check if it's a valid escape sequence
-                const validEscapes = ['n', 'r', 't', 'b', 'f', '\\', '"', '/', 'u'];
-                if (validEscapes.includes(char)) {
-                    repaired += '\\' + char;
+        // Strategy: Use regex to find and fix control characters in string values
+        function sanitizeJsonString(str) {
+            // First, try to extract JSON object boundaries
+            const jsonMatch = str.match(/\{[\s\S]*\}/);
+            if (!jsonMatch) {
+                return str;
+            }
+            
+            let jsonContent = jsonMatch[0];
+            let result = '';
+            let inString = false;
+            let escapeNext = false;
+            
+            for (let i = 0; i < jsonContent.length; i++) {
+                const char = jsonContent[i];
+                const charCode = jsonContent.charCodeAt(i);
+                
+                // Handle escape sequences
+                if (escapeNext) {
+                    result += char;
+                    // Handle unicode escapes
+                    if (char === 'u' && i + 4 < jsonContent.length) {
+                        const unicodeSeq = jsonContent.substring(i + 1, i + 5);
+                        if (/^[0-9A-Fa-f]{4}$/.test(unicodeSeq)) {
+                            result += unicodeSeq;
+                            i += 4;
+                        }
+                    }
+                    escapeNext = false;
+                    continue;
                 }
-                else if (char === 'u' && i + 4 < jsonStr.length) {
-                    // Unicode escape sequence \uXXXX
-                    const unicodeSeq = jsonStr.substring(i, i + 5);
-                    if (/^u[0-9A-Fa-f]{4}$/.test(unicodeSeq)) {
-                        repaired += '\\' + unicodeSeq;
-                        i += 4; // Skip the next 4 characters
+                
+                if (char === '\\') {
+                    escapeNext = true;
+                    result += char;
+                    continue;
+                }
+                
+                // Track string boundaries (only if not escaped)
+                if (char === '"') {
+                    inString = !inString;
+                    result += char;
+                    continue;
+                }
+                
+                // Inside a string: sanitize control characters
+                if (inString) {
+                    // Control characters that need to be escaped or removed
+                    if (charCode >= 0x00 && charCode <= 0x1F) {
+                        // Convert common control characters to JSON escapes
+                        switch (char) {
+                            case '\n':
+                                result += '\\n';
+                                break;
+                            case '\r':
+                                result += '\\r';
+                                break;
+                            case '\t':
+                                result += '\\t';
+                                break;
+                            case '\b':
+                                result += '\\b';
+                                break;
+                            case '\f':
+                                result += '\\f';
+                                break;
+                            default:
+                                // Remove other control characters (they break JSON)
+                                continue;
+                        }
+                    }
+                    else if (charCode === 0x7F) {
+                        // DEL character - remove
+                        continue;
                     }
                     else {
-                        // Invalid unicode escape, escape the backslash
-                        repaired += '\\\\u';
+                        result += char;
                     }
                 }
                 else {
-                    // Invalid escape sequence - escape the backslash and keep the character
-                    repaired += '\\\\' + char;
-                }
-                escapeNext = false;
-                continue;
-            }
-            if (char === '\\') {
-                // Start of escape sequence
-                escapeNext = true;
-                continue;
-            }
-            if (char === '"') {
-                inString = !inString;
-                repaired += char;
-                continue;
-            }
-            if (inString) {
-                // Inside a string: escape control characters and special characters
-                if (char === '\n') {
-                    repaired += '\\n';
-                }
-                else if (char === '\r') {
-                    repaired += '\\r';
-                }
-                else if (char === '\t') {
-                    repaired += '\\t';
-                }
-                else if (char === '\b') {
-                    repaired += '\\b';
-                }
-                else if (char === '\f') {
-                    repaired += '\\f';
-                }
-                else if (char === '\\') {
-                    // Unescaped backslash in string - should be escaped
-                    repaired += '\\\\';
-                }
-                else if (char === '"') {
-                    // Unescaped quote in string - should be escaped
-                    repaired += '\\"';
-                }
-                else if (charCode >= 0x00 && charCode <= 0x1F) {
-                    // Control characters (except already handled ones) - remove or escape
-                    // For most control chars, we'll remove them
-                    continue;
-                }
-                else if (charCode === 0x7F) {
-                    // DEL character - remove
-                    continue;
-                }
-                else {
-                    repaired += char;
+                    // Outside a string: keep as is
+                    result += char;
                 }
             }
-            else {
-                // Outside a string: keep as is
-                repaired += char;
-            }
+            
+            return result;
         }
-        // If we ended with an escape sequence, close it properly
-        if (escapeNext) {
-            repaired += '\\\\';
-        }
-        jsonStr = repaired;
+        
+        // First pass: sanitize the JSON string
+        jsonStr = sanitizeJsonString(jsonStr);
         let json;
         try {
             json = JSON.parse(jsonStr);
         }
         catch (parseError) {
-            console.error("JSON Parse Error:", parseError.message);
+            console.error("JSON Parse Error (first attempt):", parseError.message);
             const errorPos = (_a = parseError.message.match(/position (\d+)/)) === null || _a === void 0 ? void 0 : _a[1];
             if (errorPos) {
                 const pos = parseInt(errorPos);
                 console.error("JSON String (around error position):", jsonStr.substring(Math.max(0, pos - 100), pos + 100));
             }
-            console.error("JSON String (first 500 chars):", jsonStr.substring(0, 500));
-            // Return a structured error response with CORS headers
-            res.status(500).json({
-                error: "Failed to parse Gemini response as JSON",
-                details: parseError.message,
-                rawResponse: jsonStr.substring(0, 2000)
-            });
-            return;
+            
+            // Fallback: Try a more aggressive sanitization
+            try {
+                console.log("Attempting fallback JSON repair...");
+                // Remove all control characters except newlines, tabs, etc. that are already escaped
+                // This is a last resort - it might break some content but should allow parsing
+                let fallbackJson = jsonStr
+                    // Remove unescaped control characters (but keep \n, \r, \t, etc. that are already escaped)
+                    .replace(/(?<!\\)[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '')
+                    // Fix any double-escaped sequences
+                    .replace(/\\\\n/g, '\\n')
+                    .replace(/\\\\r/g, '\\r')
+                    .replace(/\\\\t/g, '\\t');
+                
+                json = JSON.parse(fallbackJson);
+                console.log("✅ Fallback JSON repair succeeded");
+            }
+            catch (fallbackError) {
+                console.error("JSON Parse Error (fallback also failed):", fallbackError.message);
+                console.error("JSON String (first 1000 chars):", jsonStr.substring(0, 1000));
+                console.error("JSON String (last 1000 chars):", jsonStr.substring(Math.max(0, jsonStr.length - 1000)));
+                
+                // Return a structured error response with CORS headers
+                res.status(500).json({
+                    error: "Failed to parse Gemini response as JSON",
+                    details: parseError.message,
+                    fallbackError: fallbackError.message,
+                    rawResponse: jsonStr.substring(0, 2000),
+                    responseLength: jsonStr.length
+                });
+                return;
+            }
         }
         // Add richtingLocatie to each location and to personeleOmvang
         if (json.locaties && Array.isArray(json.locaties)) {

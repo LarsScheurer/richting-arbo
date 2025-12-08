@@ -381,7 +381,15 @@ export const customerService = {
         id: profielId,
         customerId,
         analyseDatum: new Date().toISOString(),
-        ...profielData
+        geanalyseerdDoor: profielData.geanalyseerdDoor || '',
+        organisatieNaam: profielData.organisatieNaam || '',
+        website: profielData.website || '',
+        risicos: profielData.risicos || [],
+        processen: profielData.processen || [],
+        functies: profielData.functies || [],
+        volledigRapport: profielData.volledigRapport || '',
+        createdAt: profielData.createdAt || new Date().toISOString(),
+        updatedAt: profielData.updatedAt || new Date().toISOString()
       };
       await setDoc(doc(db, 'organisatieProfielen', profielId), cleanData(profiel));
     } catch (e) {

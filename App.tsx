@@ -39,8 +39,16 @@ const getCategoryLabel = (mainId: string, subId?: string) => {
 
 // Fine & Kinney conversie functies
 // Converteert oude waarden (1-5) naar Fine & Kinney waarden
-const convertKansToFineKinney = (oldValue: number): number => {
+const convertKansToFineKinney = (oldValue: number | undefined | null): number => {
+  if (!oldValue || isNaN(oldValue)) return 0;
+  
   // Fine & Kinney Kans (W) waarden: 0.5, 1, 3, 6, 10
+  const validFineKinneyKans = [0.5, 1, 3, 6, 10];
+  
+  // Als waarde al een geldige Fine & Kinney waarde is, gebruik die
+  if (validFineKinneyKans.includes(oldValue)) return oldValue;
+  
+  // Anders, converteer van oude schaal (1-5) naar Fine & Kinney
   const mapping: Record<number, number> = {
     1: 0.5,
     2: 1,
@@ -48,13 +56,20 @@ const convertKansToFineKinney = (oldValue: number): number => {
     4: 6,
     5: 10
   };
-  // Als waarde al > 5, dan is het al een Fine & Kinney waarde
-  if (oldValue > 5) return oldValue;
+  
   return mapping[oldValue] || oldValue;
 };
 
-const convertEffectToFineKinney = (oldValue: number): number => {
+const convertEffectToFineKinney = (oldValue: number | undefined | null): number => {
+  if (!oldValue || isNaN(oldValue)) return 0;
+  
   // Fine & Kinney Effect (E) waarden: 1, 3, 7, 15, 40
+  const validFineKinneyEffect = [1, 3, 7, 15, 40];
+  
+  // Als waarde al een geldige Fine & Kinney waarde is, gebruik die
+  if (validFineKinneyEffect.includes(oldValue)) return oldValue;
+  
+  // Anders, converteer van oude schaal (1-5) naar Fine & Kinney
   const mapping: Record<number, number> = {
     1: 1,
     2: 3,
@@ -62,9 +77,35 @@ const convertEffectToFineKinney = (oldValue: number): number => {
     4: 15,
     5: 40
   };
-  // Als waarde al > 5, dan is het al een Fine & Kinney waarde
-  if (oldValue > 5) return oldValue;
+  
   return mapping[oldValue] || oldValue;
+};
+
+// Centrale prioriteit styling functies
+const getPrioriteitLabel = (niveau: number): string => {
+  const labels = ['Zeer hoog', 'Hoog', 'Middel', 'Laag', 'Zeer laag'];
+  return labels[niveau - 1] || 'Onbekend';
+};
+
+const getPrioriteitColors = (niveau: number): string => {
+  const colors = [
+    'bg-red-100 text-red-700 border-red-300',      // 1. Zeer hoog
+    'bg-orange-100 text-orange-700 border-orange-300', // 2. Hoog
+    'bg-yellow-100 text-yellow-700 border-yellow-300', // 3. Middel
+    'bg-blue-100 text-blue-700 border-blue-300',   // 4. Laag
+    'bg-green-100 text-green-700 border-green-300' // 5. Zeer laag
+  ];
+  return colors[niveau - 1] || colors[4]; // Default naar zeer laag
+};
+
+const getPrioriteitBadge = (niveau: number, showNumber: boolean = true): React.ReactNode => {
+  const label = getPrioriteitLabel(niveau);
+  const colors = getPrioriteitColors(niveau);
+  return (
+    <span className={`px-3 py-1.5 rounded-lg text-xs font-bold border-2 ${colors}`}>
+      {showNumber ? `${niveau}. ` : ''}{label}
+    </span>
+  );
 };
 
 const getStatusLabel = (status: string) => {
@@ -75,6 +116,216 @@ const getStatusLabel = (status: string) => {
     case 'rejected': return 'Afgewezen';
     default: return status;
   }
+};
+
+// Markdown Renderer Component voor Volledig Rapport
+const MarkdownRenderer: React.FC<{ content: string }> = ({ content }) => {
+  if (!content) return null;
+
+  // Split content into lines for processing
+  const lines = content.split('\n');
+  const elements: React.ReactNode[] = [];
+  let currentTable: string[] = [];
+  let inTable = false;
+  let listItems: string[] = [];
+  let inList = false;
+
+  const flushList = () => {
+    if (listItems.length > 0) {
+      elements.push(
+        <ul key={`list-${elements.length}`} className="list-disc list-outside space-y-2 mb-5 ml-6 pl-2">
+          {listItems.map((item, idx) => {
+            const processedItem = item.trim()
+              .replace(/\*\*(.*?)\*\*/g, '<strong class="font-semibold text-slate-900">$1</strong>')
+              .replace(/\*(.*?)\*/g, '<em class="italic">$1</em>')
+              .replace(/`(.*?)`/g, '<code class="bg-gray-200 px-1.5 py-0.5 rounded text-xs font-mono">$1</code>');
+            
+            return (
+              <li key={idx} className="text-gray-700 leading-relaxed text-base" dangerouslySetInnerHTML={{ __html: processedItem }} />
+            );
+          })}
+        </ul>
+      );
+      listItems = [];
+    }
+    inList = false;
+  };
+
+  const flushTable = () => {
+    if (currentTable.length > 0) {
+      const tableRows = currentTable.filter(row => row.trim() && !row.match(/^[\|\s\-:]+$/));
+      if (tableRows.length > 0) {
+        // Parse headers (first row)
+        const headerRow = tableRows[0];
+        const headers = headerRow.split('|')
+          .map(h => h.trim())
+          .filter(h => h && !h.match(/^[\-:]+$/));
+        
+        // Parse data rows (skip separator row if present)
+        const dataRows = tableRows.slice(1)
+          .filter(row => !row.match(/^[\|\s\-:]+$/))
+          .map(row => 
+            row.split('|')
+              .map(cell => cell.trim())
+              .filter((cell, idx, arr) => {
+                // Filter out empty cells at start/end if they're just from markdown formatting
+                if (idx === 0 && cell === '') return false;
+                if (idx === arr.length - 1 && cell === '') return false;
+                return true;
+              })
+          );
+
+        if (headers.length > 0 && dataRows.length > 0) {
+          elements.push(
+            <div key={`table-${elements.length}`} className="overflow-x-auto mb-6 shadow-md rounded-lg border border-gray-300 my-4">
+              <table className="min-w-full border-collapse bg-white">
+                <thead>
+                  <tr className="bg-gradient-to-r from-richting-orange to-orange-600 text-white">
+                    {headers.map((header, idx) => (
+                      <th key={idx} className="border border-orange-400 px-4 py-3 text-left text-sm font-bold whitespace-nowrap">
+                        {header.replace(/\*\*/g, '').replace(/\*/g, '').trim()}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {dataRows.map((row, rowIdx) => (
+                    <tr key={rowIdx} className={`transition-colors ${rowIdx % 2 === 0 ? 'bg-white hover:bg-orange-50' : 'bg-gray-50 hover:bg-orange-50'}`}>
+                      {row.slice(0, headers.length).map((cell, cellIdx) => {
+                        // Process cell content (remove markdown formatting)
+                        const processedCell = cell
+                          .replace(/\*\*(.*?)\*\*/g, '<strong class="font-semibold text-slate-900">$1</strong>')
+                          .replace(/\*(.*?)\*/g, '<em class="italic text-slate-700">$1</em>')
+                          .replace(/`(.*?)`/g, '<code class="bg-gray-200 px-1.5 py-0.5 rounded text-xs font-mono text-gray-800">$1</code>');
+                        
+                        return (
+                          <td key={cellIdx} className="border border-gray-300 px-4 py-3 text-sm text-gray-700 align-top">
+                            <span dangerouslySetInnerHTML={{ __html: processedCell || '&nbsp;' }} />
+                          </td>
+                        );
+                      })}
+                      {/* Fill missing cells if row is shorter than headers */}
+                      {Array.from({ length: Math.max(0, headers.length - row.length) }).map((_, idx) => (
+                        <td key={`empty-${idx}`} className="border border-gray-300 px-4 py-3 text-sm text-gray-400">
+                          &nbsp;
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          );
+        }
+      }
+      currentTable = [];
+    }
+    inTable = false;
+  };
+
+  lines.forEach((line, index) => {
+    const trimmed = line.trim();
+
+    // Check for table
+    if (trimmed.includes('|') && trimmed.split('|').length > 2) {
+      if (!inTable) {
+        flushList();
+        inTable = true;
+      }
+      // Skip separator rows (|---|---|)
+      if (!trimmed.match(/^[\|\s\-:]+$/)) {
+        currentTable.push(trimmed);
+      }
+      return;
+    } else if (inTable) {
+      flushTable();
+    }
+
+    // Check for headers
+    if (trimmed.startsWith('# ')) {
+      flushList();
+      elements.push(
+        <h1 key={`h1-${index}`} className="text-3xl font-bold text-slate-900 mt-10 mb-5 pb-3 border-b-2 border-richting-orange first:mt-0">
+          {trimmed.substring(2).trim()}
+        </h1>
+      );
+    } else if (trimmed.startsWith('## ')) {
+      flushList();
+      elements.push(
+        <h2 key={`h2-${index}`} className="text-2xl font-bold text-slate-800 mt-8 mb-4 pt-2">
+          {trimmed.substring(3).trim()}
+        </h2>
+      );
+    } else if (trimmed.startsWith('### ')) {
+      flushList();
+      elements.push(
+        <h3 key={`h3-${index}`} className="text-xl font-bold text-slate-700 mt-6 mb-3 pt-1">
+          {trimmed.substring(4).trim()}
+        </h3>
+      );
+    } else if (trimmed.startsWith('#### ')) {
+      flushList();
+      elements.push(
+        <h4 key={`h4-${index}`} className="text-lg font-bold text-slate-700 mt-4 mb-2">
+          {trimmed.substring(5).trim()}
+        </h4>
+      );
+    } else if (trimmed.startsWith('- ') || trimmed.startsWith('* ')) {
+      if (!inList) {
+        flushTable();
+        inList = true;
+      }
+      listItems.push(trimmed.substring(2));
+    } else if (trimmed.startsWith('**') && trimmed.endsWith('**')) {
+      flushList();
+      elements.push(
+        <p key={`bold-${index}`} className="font-bold text-slate-900 mb-2">
+          {trimmed.replace(/\*\*/g, '')}
+        </p>
+      );
+    } else if (trimmed === '---' || trimmed === '***') {
+      flushList();
+      elements.push(
+        <hr key={`hr-${index}`} className="my-6 border-t-2 border-gray-300" />
+      );
+    } else if (trimmed) {
+      flushList();
+      // Regular paragraph - check if it contains links
+      let processedText = trimmed
+        .replace(/\*\*(.*?)\*\*/g, '<strong class="font-bold text-slate-900">$1</strong>')
+        .replace(/\*(.*?)\*/g, '<em class="italic">$1</em>')
+        .replace(/`(.*?)`/g, '<code class="bg-gray-200 px-1.5 py-0.5 rounded text-xs font-mono text-gray-800">$1</code>')
+        .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer" class="text-richting-orange hover:text-orange-600 underline font-medium">$1</a>');
+      
+      elements.push(
+        <p key={`p-${index}`} className="text-gray-700 leading-relaxed mb-4 text-base" dangerouslySetInnerHTML={{ __html: processedText }} />
+      );
+    } else if (trimmed === '') {
+      // Empty line - flush lists/tables if needed
+      flushList();
+      if (!inTable) {
+        elements.push(<br key={`br-${index}`} />);
+      }
+    }
+  });
+
+  // Flush any remaining lists or tables
+  flushList();
+  flushTable();
+
+  return (
+    <div className="prose prose-slate max-w-none">
+      <div className="text-base leading-relaxed space-y-4">
+        {elements.length > 0 ? (
+          <div className="space-y-6">
+            {elements}
+          </div>
+        ) : (
+          <div className="text-gray-500 italic">Geen inhoud beschikbaar</div>
+        )}
+      </div>
+    </div>
+  );
 };
 
 const ensureUrl = (url: string) => {
@@ -328,6 +579,7 @@ const CustomerDetailView = ({
   const [isAnalyzingOrganisatie, setIsAnalyzingOrganisatie] = useState(false);
   const [isAnalyzingCultuur, setIsAnalyzingCultuur] = useState(false);
   const [organisatieAnalyseResultaat, setOrganisatieAnalyseResultaat] = useState<string | null>(null);
+  const [progressieveHoofdstukken, setProgressieveHoofdstukken] = useState<Array<{titel: string, content: string}>>([]);
   const [cultuurAnalyseResultaat, setCultuurAnalyseResultaat] = useState<string | null>(null);
   const [analyseStap, setAnalyseStap] = useState(0); // 0 = niet gestart, 1-12 = huidige stap
   const [cultuurAnalyseStap, setCultuurAnalyseStap] = useState(0); // 0 = niet gestart, 1-12 = huidige stap
@@ -565,19 +817,45 @@ const CustomerDetailView = ({
   };
 
   const handleAddContact = async () => {
-    if (!contactFirst || !contactEmail) return;
-    const newContact: ContactPerson = {
-        id: `contact_${Date.now()}`,
+    // Validatie
+    if (!contactFirst || !contactFirst.trim()) {
+      alert('Voornaam is verplicht');
+      return;
+    }
+    if (!contactEmail || !contactEmail.trim()) {
+      alert('Email is verplicht');
+      return;
+    }
+    
+    // Email validatie
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(contactEmail.trim())) {
+      alert('Voer een geldig e-mailadres in');
+      return;
+    }
+    
+    try {
+      const newContact: ContactPerson = {
+        id: `contact_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
         customerId: customer.id,
-        firstName: contactFirst,
-        lastName: contactLast,
-        email: contactEmail,
-        role: contactRole
-    };
-    await customerService.addContactPerson(newContact);
-    setContacts(prev => [...prev, newContact]);
-    setIsAddingContact(false);
-    setContactFirst(''); setContactLast(''); setContactEmail(''); setContactRole('');
+        firstName: contactFirst.trim(),
+        lastName: contactLast.trim(),
+        email: contactEmail.trim(),
+        role: contactRole.trim() || undefined,
+        phone: undefined
+      };
+      
+      await customerService.addContactPerson(newContact);
+      setContacts(prev => [...prev, newContact]);
+      setIsAddingContact(false);
+      setContactFirst(''); 
+      setContactLast(''); 
+      setContactEmail(''); 
+      setContactRole('');
+    } catch (error) {
+      console.error('Error adding contact:', error);
+      alert('Fout bij het toevoegen van contactpersoon. Probeer het opnieuw.');
+    }
   };
 
   const handleChangeStatus = async (newStatus: 'active' | 'prospect' | 'churned' | 'rejected') => {
@@ -926,18 +1204,68 @@ const CustomerDetailView = ({
             {isAddingContact && (
                 <div className="bg-gray-50 p-4 rounded-lg border border-gray-200 mb-4 animate-fade-in">
                     <h4 className="text-xs font-bold uppercase text-gray-500 mb-3">Nieuw Contact</h4>
-                    <div className="space-y-3">
+                    <form onSubmit={(e) => {
+                      e.preventDefault();
+                      handleAddContact();
+                    }} className="space-y-3">
                         <div className="flex gap-2">
-                            <input type="text" placeholder="Voornaam" className="w-full text-sm border p-2 rounded" value={contactFirst} onChange={e => setContactFirst(e.target.value)} />
-                            <input type="text" placeholder="Achternaam" className="w-full text-sm border p-2 rounded" value={contactLast} onChange={e => setContactLast(e.target.value)} />
+                            <input 
+                              type="text" 
+                              placeholder="Voornaam *" 
+                              className="w-full text-sm border border-gray-300 p-2 rounded focus:ring-richting-orange focus:border-richting-orange" 
+                              value={contactFirst} 
+                              onChange={e => setContactFirst(e.target.value)}
+                              required
+                            />
+                            <input 
+                              type="text" 
+                              placeholder="Achternaam" 
+                              className="w-full text-sm border border-gray-300 p-2 rounded focus:ring-richting-orange focus:border-richting-orange" 
+                              value={contactLast} 
+                              onChange={e => setContactLast(e.target.value)} 
+                            />
                         </div>
-                        <input type="email" placeholder="Email" className="w-full text-sm border p-2 rounded" value={contactEmail} onChange={e => setContactEmail(e.target.value)} />
-                        <input type="text" placeholder="Rol (bijv. HR Manager)" className="w-full text-sm border p-2 rounded" value={contactRole} onChange={e => setContactRole(e.target.value)} />
+                        <input 
+                          type="email" 
+                          placeholder="Email *" 
+                          className="w-full text-sm border border-gray-300 p-2 rounded focus:ring-richting-orange focus:border-richting-orange" 
+                          value={contactEmail} 
+                          onChange={e => setContactEmail(e.target.value)}
+                          required
+                        />
+                        <input 
+                          type="text" 
+                          placeholder="Rol (bijv. HR Manager)" 
+                          className="w-full text-sm border border-gray-300 p-2 rounded focus:ring-richting-orange focus:border-richting-orange" 
+                          value={contactRole} 
+                          onChange={e => setContactRole(e.target.value)} 
+                        />
                         <div className="flex gap-2 pt-2">
-                            <button onClick={handleAddContact} className="bg-richting-orange text-white text-xs px-3 py-2 rounded font-bold">Opslaan</button>
-                            <button onClick={() => setIsAddingContact(false)} className="text-gray-500 text-xs px-3 py-2">Annuleren</button>
+                            <button 
+                              type="submit"
+                              onClick={(e) => {
+                                e.preventDefault();
+                                handleAddContact();
+                              }}
+                              className="bg-richting-orange text-white text-xs px-4 py-2 rounded font-bold hover:bg-orange-600 transition-colors"
+                            >
+                              Opslaan
+                            </button>
+                            <button 
+                              type="button"
+                              onClick={() => {
+                                setIsAddingContact(false);
+                                setContactFirst('');
+                                setContactLast('');
+                                setContactEmail('');
+                                setContactRole('');
+                              }} 
+                              className="text-gray-500 text-xs px-4 py-2 hover:text-gray-700"
+                            >
+                              Annuleren
+                            </button>
                         </div>
-                    </div>
+                    </form>
                 </div>
             )}
 
@@ -970,34 +1298,90 @@ const CustomerDetailView = ({
                onClick={async () => {
                  setIsAnalyzingOrganisatie(true);
                  setOrganisatieAnalyseResultaat(null);
+                 setProgressieveHoofdstukken([]);
                  setAnalyseStap(0);
                  
-                 // Start progress steps
+                 // Declare timeout variable in outer scope for cleanup
+                 let hoofdstukTimeout: NodeJS.Timeout | null = null;
+                 
+                 // Start progress steps met beschrijvingen - gelijkmatige timing
                  const stappen = [
-                   "Inleiding en Branche-identificatie",
-                   "SBI-codes en Bedrijfsinformatie",
-                   "Arbocatalogus en Branche-RI&E",
-                   "Risicocategorieën en Kwantificering",
-                   "Primaire Processen in de Branche",
-                   "Werkzaamheden en Functies",
-                   "Verzuim in de Branche",
-                   "Beroepsziekten in de Branche",
-                   "Gevaarlijke Stoffen en Risico's",
-                   "Risicomatrices",
-                   "Vooruitblik en Speerpunten",
-                   "Stappenplan voor een Preventieve Samenwerking"
+                   { 
+                     naam: "Inleiding en Branche-identificatie", 
+                     beschrijving: "Analyseert de sector en actualiteiten op het gebied van mens en werk. Identificeert relevante CAO-thema's en betrokken organisaties.",
+                     dataKey: 'brancheIdentificatie',
+                     hoofdstukNummer: 1
+                   },
+                   { 
+                     naam: "SBI-codes en Bedrijfsinformatie", 
+                     beschrijving: "Bepaalt de juiste SBI-codes en analyseert personele omvang en vestigingslocaties in Nederland.",
+                     dataKey: 'sbiCodes',
+                     hoofdstukNummer: 2
+                   },
+                   { 
+                     naam: "Arbocatalogus en Branche-RI&E", 
+                     beschrijving: "Onderzoekt erkende arbo-instrumenten zoals Arbocatalogus en Branche-RI&E en hun actuele status.",
+                     dataKey: 'arbocatalogus',
+                     hoofdstukNummer: 3
+                   },
+                   { 
+                     naam: "Risicocategorieën en Kwantificering", 
+                     beschrijving: "Inventariseert en kwantificeert risico's (psychisch, fysiek, overige) met Fine & Kinney methodiek.",
+                     dataKey: 'risicocategorieen',
+                     hoofdstukNummer: 4
+                   },
+                   { 
+                     naam: "Primaire Processen in de Branche", 
+                     beschrijving: "Beschrijft de kernprocessen op de werkvloer die typerend zijn voor deze branche.",
+                     dataKey: 'primairProcessen',
+                     hoofdstukNummer: 5
+                   },
+                   { 
+                     naam: "Werkzaamheden en Functies", 
+                     beschrijving: "Inventariseert de meest voorkomende functies met taken en verantwoordelijkheden.",
+                     dataKey: 'werkzaamheden',
+                     hoofdstukNummer: 6
+                   },
+                   { 
+                     naam: "Verzuim in de Branche", 
+                     beschrijving: "Analyseert verzuimcijfers, belangrijkste oorzaken en vergelijkt met landelijk gemiddelde.",
+                     dataKey: 'verzuim',
+                     hoofdstukNummer: 7
+                   },
+                   { 
+                     naam: "Beroepsziekten in de Branche", 
+                     beschrijving: "Identificeert meest voorkomende beroepsziekten en koppelt deze aan geïdentificeerde risico's.",
+                     dataKey: 'beroepsziekten',
+                     hoofdstukNummer: 8
+                   },
+                   { 
+                     naam: "Gevaarlijke Stoffen en Risico's", 
+                     beschrijving: "Inventariseert gevaarlijke stoffen die in de sector worden gebruikt en bijbehorende risico's.",
+                     dataKey: 'gevaarlijkeStoffen',
+                     hoofdstukNummer: 9
+                   },
+                   { 
+                     naam: "Risicomatrices", 
+                     beschrijving: "Creëert overzichtelijke matrices die de samenhang tussen processen, functies en risico's tonen.",
+                     dataKey: 'risicomatrices',
+                     hoofdstukNummer: 10
+                   },
+                   { 
+                     naam: "Vooruitblik en Speerpunten", 
+                     beschrijving: "Analyseert verwachte effecten van CAO-thema's en formuleert concrete speerpunten voor verzuimreductie.",
+                     dataKey: 'vooruitblik',
+                     hoofdstukNummer: 11
+                   },
+                   { 
+                     naam: "Stappenplan voor een Preventieve Samenwerking", 
+                     beschrijving: "Genereert een volledig, op maat gemaakt stappenplan met concrete diensten en interventies.",
+                     dataKey: 'stappenplan',
+                     hoofdstukNummer: 12
+                   }
                  ];
                  
-                 // Simulate progress through steps
-                 const stepInterval = setInterval(() => {
-                   setAnalyseStap(prev => {
-                     if (prev >= 12) {
-                       clearInterval(stepInterval);
-                       return 12;
-                     }
-                     return prev + 1;
-                   });
-                 }, 2000); // Update every 2 seconds
+                 // Gelijkmatige timing: verdeel tijd over alle stappen (bijv. 2.5 seconden per stap)
+                 const timingPerStap = 2500; // 2.5 seconden per hoofdstuk
                  
                  try {
                    // Use Firebase Function to get active prompt from Firestore
@@ -1013,7 +1397,7 @@ const CustomerDetailView = ({
                      website: customer.website || ''
                    };
                    
-                   console.log('📤 Calling analyseBranche with:', requestBody);
+                   console.log('📤 Calling Publiek Organisatie Profiel analyse with:', requestBody);
                    
                    const response = await fetch(functionsUrl, {
                      method: 'POST',
@@ -1034,96 +1418,173 @@ const CustomerDetailView = ({
                    const data = await response.json();
                    console.log('✅ Received data from function:', Object.keys(data));
                    
-                   // The Firebase Function returns JSON with the full analysis
-                   // Convert to markdown format for display
-                   let result = '';
-                   if (data.inleiding) result += `# ${data.inleiding}\n\n`;
-                   if (data.brancheIdentificatie) result += `## Hoofdstuk 1: Introductie en Branche-identificatie\n\n${data.brancheIdentificatie}\n\n`;
-                   if (data.sbiCodes) result += `## Hoofdstuk 2: SBI-codes en Bedrijfsinformatie\n\n${data.sbiCodes}\n\n`;
-                   if (data.arbocatalogus) result += `## Hoofdstuk 3: Arbocatalogus en Branche-RI&E\n\n${data.arbocatalogus}\n\n`;
-                   if (data.risicocategorieen) result += `## Hoofdstuk 4: Risicocategorieën en Kwantificering\n\n${data.risicocategorieen}\n\n`;
-                   if (data.primairProcessen) result += `## Hoofdstuk 5: Primaire Processen in de Branche\n\n${data.primairProcessen}\n\n`;
-                   if (data.werkzaamheden) result += `## Hoofdstuk 6: Werkzaamheden en Functies\n\n${data.werkzaamheden}\n\n`;
-                   if (data.verzuim) result += `## Hoofdstuk 7: Verzuim in de Branche\n\n${data.verzuim}\n\n`;
-                   if (data.beroepsziekten) result += `## Hoofdstuk 8: Beroepsziekten in de Branche\n\n${data.beroepsziekten}\n\n`;
-                   if (data.gevaarlijkeStoffen) result += `## Hoofdstuk 9: Gevaarlijke Stoffen en Risico's\n\n${data.gevaarlijkeStoffen}\n\n`;
-                   if (data.risicomatrices) result += `## Hoofdstuk 10: Risicomatrices\n\n${data.risicomatrices}\n\n`;
-                   if (data.vooruitblik) result += `## Hoofdstuk 11: Vooruitblik en Speerpunten\n\n${data.vooruitblik}\n\n`;
-                   if (data.stappenplan) result += `## Hoofdstuk 12: Stappenplan voor een Preventieve Samenwerking\n\n${data.stappenplan}\n\n`;
-                   
-                   // If no structured data, use raw response
-                   if (!result && typeof data === 'string') {
-                     result = data;
-                   } else if (!result) {
-                     result = JSON.stringify(data, null, 2);
+                   // Parse hoofdstukken uit data
+                   const hoofdstukken: Array<{titel: string, content: string}> = [];
+                   if (data.inleiding) {
+                     hoofdstukken.push({ titel: data.inleiding, content: '' });
                    }
                    
-                   clearInterval(stepInterval);
-                   setAnalyseStap(12); // Mark all steps as complete
-                   setOrganisatieAnalyseResultaat(result);
+                   // Map data keys naar hoofdstuk titels
+                   const hoofdstukTitels: Record<string, string> = {
+                     'brancheIdentificatie': 'Hoofdstuk 1: Introductie en Branche-identificatie',
+                     'sbiCodes': 'Hoofdstuk 2: SBI-codes en Bedrijfsinformatie',
+                     'arbocatalogus': 'Hoofdstuk 3: Arbocatalogus en Branche-RI&E',
+                     'risicocategorieen': 'Hoofdstuk 4: Risicocategorieën en Kwantificering',
+                     'primairProcessen': 'Hoofdstuk 5: Primaire Processen in de Branche',
+                     'werkzaamheden': 'Hoofdstuk 6: Werkzaamheden en Functies',
+                     'verzuim': 'Hoofdstuk 7: Verzuim in de Branche',
+                     'beroepsziekten': 'Hoofdstuk 8: Beroepsziekten in de Branche',
+                     'gevaarlijkeStoffen': 'Hoofdstuk 9: Gevaarlijke Stoffen en Risico\'s',
+                     'risicomatrices': 'Hoofdstuk 10: Risicomatrices',
+                     'vooruitblik': 'Hoofdstuk 11: Vooruitblik en Speerpunten',
+                     'stappenplan': 'Hoofdstuk 12: Stappenplan voor een Preventieve Samenwerking'
+                   };
                    
-                   // Save to Firestore as OrganisatieProfiel
-                   if (data && customer.id) {
-                     try {
-                       await customerService.saveOrganisatieProfiel(customer.id, data);
+                   // Progressief hoofdstukken toevoegen
+                   let hoofdstukIndex = 0;
+                   const alleHoofdstukken: Array<{titel: string, content: string}> = [];
+                   
+                   // Voeg inleiding toe als die er is
+                   if (data.inleiding) {
+                     alleHoofdstukken.push({ titel: data.inleiding, content: '' });
+                     setProgressieveHoofdstukken([{ titel: data.inleiding, content: '' }]);
+                   }
+                   
+                   const addHoofdstuk = () => {
+                     if (hoofdstukIndex < stappen.length) {
+                       const stap = stappen[hoofdstukIndex];
+                       const content = data[stap.dataKey];
                        
-                       // Import locaties from OrganisatieProfiel if available
-                       if (data.locaties && Array.isArray(data.locaties)) {
-                         const allRichtingLocaties = await richtingLocatiesService.getAllLocaties();
-                         const currentLocations = await customerService.getLocations(customer.id);
+                       if (content) {
+                         const titel = hoofdstukTitels[stap.dataKey] || stap.naam;
+                         alleHoofdstukken.push({ titel, content });
                          
-                         for (const profielLocatie of data.locaties) {
-                           // Check if location already exists
-                           const existingLoc = currentLocations.find(loc => 
-                             loc.name === profielLocatie.naam && 
-                             loc.address === profielLocatie.adres
-                           );
-                           
-                           if (!existingLoc) {
-                             // Find nearest Richting location
-                             let richtingLocatieId: string | undefined;
-                             let richtingLocatieNaam: string | undefined;
-                             
-                             if (profielLocatie.richtingLocatie) {
-                               const matchingRichting = allRichtingLocaties.find(rl => 
-                                 rl.vestiging === profielLocatie.richtingLocatie
-                               );
-                               if (matchingRichting) {
-                                 richtingLocatieId = matchingRichting.id;
-                                 richtingLocatieNaam = matchingRichting.vestiging;
-                               }
-                             }
-                             
-                             const newLoc: Location = {
-                               id: `loc_${Date.now()}_${Math.random()}`,
-                               customerId: customer.id,
-                               name: profielLocatie.naam || 'Locatie',
-                               address: profielLocatie.adres || '',
-                               city: profielLocatie.stad || '',
-                               employeeCount: profielLocatie.aantalMedewerkers || undefined,
-                               richtingLocatieId,
-                               richtingLocatieNaam
-                             };
-                             
-                             await customerService.addLocation(newLoc);
-                             setLocations(prev => [...prev, newLoc]);
-                           } else if (profielLocatie.aantalMedewerkers && !existingLoc.employeeCount) {
-                             // Update existing location with employee count if missing
-                             const updatedLoc = { ...existingLoc, employeeCount: profielLocatie.aantalMedewerkers };
-                             await customerService.addLocation(updatedLoc);
-                             setLocations(prev => prev.map(loc => loc.id === existingLoc.id ? updatedLoc : loc));
+                         // Update state met alle hoofdstukken tot nu toe
+                         setProgressieveHoofdstukken([...alleHoofdstukken]);
+                         setAnalyseStap(hoofdstukIndex + 1);
+                         
+                         // Scroll naar nieuw hoofdstuk
+                         setTimeout(() => {
+                           const element = document.getElementById(`hoofdstuk-${hoofdstukIndex}`);
+                           if (element) {
+                             element.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
                            }
+                         }, 100);
+                       }
+                       
+                       hoofdstukIndex++;
+                       if (hoofdstukIndex < stappen.length) {
+                         setTimeout(addHoofdstuk, timingPerStap);
+                       } else {
+                         // Alle hoofdstukken zijn toegevoegd
+                         setAnalyseStap(12);
+                         setIsAnalyzingOrganisatie(false);
+                         
+                         // Build complete result voor opslaan
+                         let result = '';
+                         if (data.inleiding) result += `# ${data.inleiding}\n\n`;
+                         alleHoofdstukken.forEach(h => {
+                           if (h.content) {
+                             result += `## ${h.titel}\n\n${h.content}\n\n`;
+                           }
+                         });
+                         setOrganisatieAnalyseResultaat(result);
+                         
+                         // Save to Firestore as OrganisatieProfiel (na alle hoofdstukken)
+                         if (data && customer.id) {
+                           (async () => {
+                             try {
+                               // Transform data to OrganisatieProfiel format
+                               const profielData: Partial<OrganisatieProfiel> = {
+                                 organisatieNaam: customer.name,
+                                 website: customer.website || '',
+                                 volledigRapport: data.volledigRapport || result,
+                                 risicos: data.risicos || [],
+                                 processen: data.processen || [],
+                                 functies: data.functies || [],
+                                 geanalyseerdDoor: user.id,
+                                 createdAt: new Date().toISOString(),
+                                 updatedAt: new Date().toISOString()
+                               };
+                               
+                               await customerService.saveOrganisatieProfiel(customer.id, profielData);
+                               
+                               // Reload the profile to show it immediately
+                               const savedProfiel = await customerService.getOrganisatieProfiel(customer.id);
+                               if (savedProfiel) {
+                                 setOrganisatieProfiel(savedProfiel);
+                               }
+                               
+                               // Import locaties from OrganisatieProfiel if available
+                               if (data.locaties && Array.isArray(data.locaties)) {
+                                 const allRichtingLocaties = await richtingLocatiesService.getAllLocaties();
+                                 const currentLocations = await customerService.getLocations(customer.id);
+                                 
+                                 for (const profielLocatie of data.locaties) {
+                                   // Check if location already exists
+                                   const existingLoc = currentLocations.find(loc => 
+                                     loc.name === profielLocatie.naam && 
+                                     loc.address === profielLocatie.adres
+                                   );
+                                   
+                                   if (!existingLoc) {
+                                     // Find nearest Richting location
+                                     let richtingLocatieId: string | undefined;
+                                     let richtingLocatieNaam: string | undefined;
+                                     
+                                     if (profielLocatie.richtingLocatie) {
+                                       const matchingRichting = allRichtingLocaties.find(rl => 
+                                         rl.vestiging === profielLocatie.richtingLocatie
+                                       );
+                                       if (matchingRichting) {
+                                         richtingLocatieId = matchingRichting.id;
+                                         richtingLocatieNaam = matchingRichting.vestiging;
+                                       }
+                                     }
+                                     
+                                     const newLoc: Location = {
+                                       id: `loc_${Date.now()}_${Math.random()}`,
+                                       customerId: customer.id,
+                                       name: profielLocatie.naam || 'Locatie',
+                                       address: profielLocatie.adres || '',
+                                       city: profielLocatie.stad || '',
+                                       employeeCount: profielLocatie.aantalMedewerkers || undefined,
+                                       richtingLocatieId,
+                                       richtingLocatieNaam
+                                     };
+                                     
+                                     await customerService.addLocation(newLoc);
+                                     setLocations(prev => [...prev, newLoc]);
+                                   } else if (profielLocatie.aantalMedewerkers && !existingLoc.employeeCount) {
+                                     // Update existing location with employee count if missing
+                                     const updatedLoc = { ...existingLoc, employeeCount: profielLocatie.aantalMedewerkers };
+                                     await customerService.addLocation(updatedLoc);
+                                     setLocations(prev => prev.map(loc => loc.id === existingLoc.id ? updatedLoc : loc));
+                                   }
+                                 }
+                               }
+                             } catch (saveError) {
+                               console.error("Error saving organisatie profiel:", saveError);
+                             }
+                           })();
                          }
                        }
-                     } catch (saveError) {
-                       console.error("Error saving organisatie profiel:", saveError);
                      }
-                   }
+                   };
+                   
+                   // Start met eerste hoofdstuk
+                   hoofdstukTimeout = setTimeout(addHoofdstuk, timingPerStap);
                  } catch (error: any) {
-                   clearInterval(stepInterval);
+                   isCancelled = true;
+                   // Clear any pending hoofdstuk timeouts
+                   if (hoofdstukTimeout) {
+                     clearTimeout(hoofdstukTimeout);
+                     hoofdstukTimeout = null;
+                   }
                    console.error("❌ Organisatie analyse error:", error);
                    const errorMessage = error.message || 'Onbekende fout';
                    setOrganisatieAnalyseResultaat(`❌ Fout bij analyse: ${errorMessage}\n\nControleer de browser console voor meer details.`);
+                   setProgressieveHoofdstukken([]);
                    setAnalyseStap(0);
                  } finally {
                    setIsAnalyzingOrganisatie(false);
@@ -1258,18 +1719,18 @@ const CustomerDetailView = ({
              </h4>
              <div className="space-y-3">
                {[
-                 "Inleiding en Branche-identificatie",
-                 "SBI-codes en Bedrijfsinformatie",
-                 "Arbocatalogus en Branche-RI&E",
-                 "Risicocategorieën en Kwantificering",
-                 "Primaire Processen in de Branche",
-                 "Werkzaamheden en Functies",
-                 "Verzuim in de Branche",
-                 "Beroepsziekten in de Branche",
-                 "Gevaarlijke Stoffen en Risico's",
-                 "Risicomatrices",
-                 "Vooruitblik en Speerpunten",
-                 "Stappenplan voor een Preventieve Samenwerking"
+                 { naam: "Inleiding en Branche-identificatie", beschrijving: "Analyseert de sector en actualiteiten op het gebied van mens en werk. Identificeert relevante CAO-thema's en betrokken organisaties." },
+                 { naam: "SBI-codes en Bedrijfsinformatie", beschrijving: "Bepaalt de juiste SBI-codes en analyseert personele omvang en vestigingslocaties in Nederland." },
+                 { naam: "Arbocatalogus en Branche-RI&E", beschrijving: "Onderzoekt erkende arbo-instrumenten zoals Arbocatalogus en Branche-RI&E en hun actuele status." },
+                 { naam: "Risicocategorieën en Kwantificering", beschrijving: "Inventariseert en kwantificeert risico's (psychisch, fysiek, overige) met Fine & Kinney methodiek." },
+                 { naam: "Primaire Processen in de Branche", beschrijving: "Beschrijft de kernprocessen op de werkvloer die typerend zijn voor deze branche." },
+                 { naam: "Werkzaamheden en Functies", beschrijving: "Inventariseert de meest voorkomende functies met taken en verantwoordelijkheden." },
+                 { naam: "Verzuim in de Branche", beschrijving: "Analyseert verzuimcijfers, belangrijkste oorzaken en vergelijkt met landelijk gemiddelde." },
+                 { naam: "Beroepsziekten in de Branche", beschrijving: "Identificeert meest voorkomende beroepsziekten en koppelt deze aan geïdentificeerde risico's." },
+                 { naam: "Gevaarlijke Stoffen en Risico's", beschrijving: "Inventariseert gevaarlijke stoffen die in de sector worden gebruikt en bijbehorende risico's." },
+                 { naam: "Risicomatrices", beschrijving: "Creëert overzichtelijke matrices die de samenhang tussen processen, functies en risico's tonen." },
+                 { naam: "Vooruitblik en Speerpunten", beschrijving: "Analyseert verwachte effecten van CAO-thema's en formuleert concrete speerpunten voor verzuimreductie." },
+                 { naam: "Stappenplan voor een Preventieve Samenwerking", beschrijving: "Genereert een volledig, op maat gemaakt stappenplan met concrete diensten en interventies. Dit is het meest uitgebreide onderdeel." }
                ].map((stap, index) => {
                  const stapNummer = index + 1;
                  const isVoltooid = analyseStap > stapNummer;
@@ -1278,34 +1739,47 @@ const CustomerDetailView = ({
                  return (
                    <div 
                      key={index}
-                     className={`flex items-center gap-3 p-2 rounded transition-colors ${
-                       isHuidige ? 'bg-orange-50 border border-orange-200' : ''
+                     className={`p-3 rounded-lg transition-all ${
+                       isHuidige 
+                         ? 'bg-orange-50 border-2 border-richting-orange shadow-sm' 
+                         : isVoltooid
+                         ? 'bg-green-50 border border-green-200'
+                         : 'bg-gray-50 border border-gray-200'
                      }`}
                    >
-                     <div className={`w-6 h-6 rounded-full flex items-center justify-center flex-shrink-0 ${
-                       isVoltooid 
-                         ? 'bg-green-500 text-white' 
-                         : isHuidige 
-                         ? 'bg-richting-orange text-white animate-pulse' 
-                         : 'bg-gray-200 text-gray-400'
-                     }`}>
-                       {isVoltooid ? (
-                         <span className="text-xs font-bold">✓</span>
-                       ) : isHuidige ? (
-                         <span className="text-xs font-bold animate-spin">⟳</span>
-                       ) : (
-                         <span className="text-xs font-bold">{stapNummer}</span>
-                       )}
+                     <div className="flex items-start gap-3">
+                       <div className={`w-7 h-7 rounded-full flex items-center justify-center flex-shrink-0 mt-0.5 ${
+                         isVoltooid 
+                           ? 'bg-green-500 text-white' 
+                           : isHuidige 
+                           ? 'bg-richting-orange text-white animate-pulse' 
+                           : 'bg-gray-300 text-gray-500'
+                       }`}>
+                         {isVoltooid ? (
+                           <span className="text-xs font-bold">✓</span>
+                         ) : isHuidige ? (
+                           <span className="text-xs font-bold animate-spin">⟳</span>
+                         ) : (
+                           <span className="text-xs font-bold">{stapNummer}</span>
+                         )}
+                       </div>
+                       <div className="flex-1 min-w-0">
+                         <div className={`text-sm font-semibold mb-1 ${
+                           isVoltooid 
+                             ? 'text-gray-600' 
+                             : isHuidige 
+                             ? 'text-richting-orange' 
+                             : 'text-gray-500'
+                         }`}>
+                           {stapNummer}. {stap.naam}
+                         </div>
+                         {isHuidige && (
+                           <div className="text-xs text-gray-600 leading-relaxed mt-1">
+                             {stap.beschrijving}
+                           </div>
+                         )}
+                       </div>
                      </div>
-                     <span className={`text-sm ${
-                       isVoltooid 
-                         ? 'text-gray-600 line-through' 
-                         : isHuidige 
-                         ? 'text-richting-orange font-bold' 
-                         : 'text-gray-400'
-                     }`}>
-                       {stapNummer}. {stap}
-                     </span>
                    </div>
                  );
                })}
@@ -1324,11 +1798,366 @@ const CustomerDetailView = ({
            </div>
          )}
 
-         {/* Analyse Resultaten */}
-         {organisatieAnalyseResultaat && (
+         {/* Progressieve Hoofdstukken Weergave */}
+         {progressieveHoofdstukken.length > 0 && (
+           <div className="bg-white border border-gray-200 rounded-lg p-6 mb-4 shadow-sm">
+             <h4 className="font-bold text-richting-orange mb-4 flex items-center gap-2 text-lg">
+               📊 Publiek Organisatie Profiel
+               {isAnalyzingOrganisatie && (
+                 <span className="text-sm font-normal text-gray-500 ml-2">
+                   (Genereren... {progressieveHoofdstukken.length} van 12 hoofdstukken)
+                 </span>
+               )}
+             </h4>
+             <div className="space-y-6 max-h-[800px] overflow-y-auto">
+               {progressieveHoofdstukken.map((hoofdstuk, index) => (
+                 <div 
+                   key={index} 
+                   id={`hoofdstuk-${index}`}
+                   className={`border-l-4 pl-4 pb-4 ${
+                     index === progressieveHoofdstukken.length - 1 
+                       ? 'border-richting-orange bg-orange-50/30' 
+                       : 'border-gray-300'
+                   } transition-all duration-500`}
+                 >
+                   <h5 className="font-bold text-slate-800 mb-3 text-lg">{hoofdstuk.titel}</h5>
+                   <div className="text-gray-700">
+                     <MarkdownRenderer content={hoofdstuk.content} />
+                   </div>
+                 </div>
+               ))}
+             </div>
+           </div>
+         )}
+
+         {/* Volledig Resultaat (alleen als alles klaar is en geen progressieve weergave) */}
+         {organisatieAnalyseResultaat && progressieveHoofdstukken.length === 0 && (
            <div className="bg-orange-50 border border-orange-200 rounded-lg p-4 mb-4">
              <h4 className="font-bold text-richting-orange mb-2 flex items-center gap-2">📊 Publiek Organisatie Profiel Resultaat</h4>
-             <p className="text-sm text-gray-700 whitespace-pre-wrap">{organisatieAnalyseResultaat}</p>
+             <div className="max-h-[800px] overflow-y-auto">
+               <MarkdownRenderer content={organisatieAnalyseResultaat} />
+             </div>
+           </div>
+         )}
+
+         {/* Call-to-action als er nog geen profiel is */}
+         {!organisatieProfiel && !isAnalyzingOrganisatie && !organisatieAnalyseResultaat && (
+           <div className="bg-gradient-to-r from-richting-orange/10 to-orange-100 border-2 border-richting-orange/30 rounded-xl p-6 mb-6">
+             <div className="flex items-start gap-4">
+               <div className="text-4xl">📊</div>
+               <div className="flex-1">
+                 <h3 className="text-xl font-bold text-slate-900 mb-2">Publiek Organisatie Profiel</h3>
+                 <p className="text-gray-700 mb-4">
+                   Genereer een volledig organisatieprofiel met risicoanalyse, processen en functies op basis van de branche en organisatiegegevens.
+                 </p>
+                 <button
+                   onClick={async () => {
+                     setIsAnalyzingOrganisatie(true);
+                     setOrganisatieAnalyseResultaat(null);
+                     setProgressieveHoofdstukken([]);
+                     setAnalyseStap(0);
+                     
+                     // Declare timeout variable in outer scope for cleanup
+                     let hoofdstukTimeout: NodeJS.Timeout | null = null;
+                     
+                     // Start progress steps met beschrijvingen - gelijkmatige timing
+                     const stappen = [
+                       { 
+                         naam: "Inleiding en Branche-identificatie", 
+                         beschrijving: "Analyseert de sector en actualiteiten op het gebied van mens en werk. Identificeert relevante CAO-thema's en betrokken organisaties.",
+                         dataKey: 'brancheIdentificatie',
+                         hoofdstukNummer: 1
+                       },
+                       { 
+                         naam: "SBI-codes en Bedrijfsinformatie", 
+                         beschrijving: "Bepaalt de juiste SBI-codes en analyseert personele omvang en vestigingslocaties in Nederland.",
+                         dataKey: 'sbiCodes',
+                         hoofdstukNummer: 2
+                       },
+                       { 
+                         naam: "Arbocatalogus en Branche-RI&E", 
+                         beschrijving: "Onderzoekt erkende arbo-instrumenten zoals Arbocatalogus en Branche-RI&E en hun actuele status.",
+                         dataKey: 'arbocatalogus',
+                         hoofdstukNummer: 3
+                       },
+                       { 
+                         naam: "Risicocategorieën en Kwantificering", 
+                         beschrijving: "Inventariseert en kwantificeert risico's (psychisch, fysiek, overige) met Fine & Kinney methodiek.",
+                         dataKey: 'risicocategorieen',
+                         hoofdstukNummer: 4
+                       },
+                       { 
+                         naam: "Primaire Processen in de Branche", 
+                         beschrijving: "Beschrijft de kernprocessen op de werkvloer die typerend zijn voor deze branche.",
+                         dataKey: 'primairProcessen',
+                         hoofdstukNummer: 5
+                       },
+                       { 
+                         naam: "Werkzaamheden en Functies", 
+                         beschrijving: "Inventariseert de meest voorkomende functies met taken en verantwoordelijkheden.",
+                         dataKey: 'werkzaamheden',
+                         hoofdstukNummer: 6
+                       },
+                       { 
+                         naam: "Verzuim in de Branche", 
+                         beschrijving: "Analyseert verzuimcijfers, belangrijkste oorzaken en vergelijkt met landelijk gemiddelde.",
+                         dataKey: 'verzuim',
+                         hoofdstukNummer: 7
+                       },
+                       { 
+                         naam: "Beroepsziekten in de Branche", 
+                         beschrijving: "Identificeert meest voorkomende beroepsziekten en koppelt deze aan geïdentificeerde risico's.",
+                         dataKey: 'beroepsziekten',
+                         hoofdstukNummer: 8
+                       },
+                       { 
+                         naam: "Gevaarlijke Stoffen en Risico's", 
+                         beschrijving: "Inventariseert gevaarlijke stoffen die in de sector worden gebruikt en bijbehorende risico's.",
+                         dataKey: 'gevaarlijkeStoffen',
+                         hoofdstukNummer: 9
+                       },
+                       { 
+                         naam: "Risicomatrices", 
+                         beschrijving: "Creëert overzichtelijke matrices die de samenhang tussen processen, functies en risico's tonen.",
+                         dataKey: 'risicomatrices',
+                         hoofdstukNummer: 10
+                       },
+                       { 
+                         naam: "Vooruitblik en Speerpunten", 
+                         beschrijving: "Analyseert verwachte effecten van CAO-thema's en formuleert concrete speerpunten voor verzuimreductie.",
+                         dataKey: 'vooruitblik',
+                         hoofdstukNummer: 11
+                       },
+                       { 
+                         naam: "Stappenplan voor een Preventieve Samenwerking", 
+                         beschrijving: "Genereert een volledig, op maat gemaakt stappenplan met concrete diensten en interventies.",
+                         dataKey: 'stappenplan',
+                         hoofdstukNummer: 12
+                       }
+                     ];
+                     
+                     // Gelijkmatige timing: verdeel tijd over alle stappen (bijv. 2.5 seconden per stap)
+                     const timingPerStap = 2500; // 2.5 seconden per hoofdstuk
+                     
+                     try {
+                       // Use Firebase Function to get active prompt from Firestore
+                       const functionsUrl = 'https://europe-west4-richting-sales-d764a.cloudfunctions.net/analyseBranche';
+                       
+                       // Validate required data
+                       if (!customer.name) {
+                         throw new Error('Organisatienaam is verplicht');
+                       }
+                       
+                       const requestBody = { 
+                         organisatieNaam: customer.name,
+                         website: customer.website || ''
+                       };
+                       
+                       console.log('📤 Calling Publiek Organisatie Profiel analyse with:', requestBody);
+                       
+                       const response = await fetch(functionsUrl, {
+                         method: 'POST',
+                         headers: {
+                           'Content-Type': 'application/json',
+                         },
+                         body: JSON.stringify(requestBody)
+                       });
+
+                       console.log('📥 Response status:', response.status, response.statusText);
+
+                       if (!response.ok) {
+                         const errorText = await response.text();
+                         console.error('❌ HTTP error response:', errorText);
+                         throw new Error(`HTTP error! status: ${response.status} - ${errorText.substring(0, 200)}`);
+                       }
+
+                   let data;
+                   try {
+                     data = await response.json();
+                     console.log('✅ Received data from function:', Object.keys(data));
+                   } catch (jsonError) {
+                     console.error('❌ Error parsing JSON response:', jsonError);
+                     const errorText = await response.text();
+                     throw new Error(`Failed to parse response as JSON. Response: ${errorText.substring(0, 500)}`);
+                   }
+                   
+                   // Check if data is valid
+                   if (!data || typeof data !== 'object') {
+                     throw new Error('Invalid data received from server');
+                   }
+                   
+                   // Map data keys naar hoofdstuk titels
+                   const hoofdstukTitels: Record<string, string> = {
+                     'brancheIdentificatie': 'Hoofdstuk 1: Introductie en Branche-identificatie',
+                     'sbiCodes': 'Hoofdstuk 2: SBI-codes en Bedrijfsinformatie',
+                     'arbocatalogus': 'Hoofdstuk 3: Arbocatalogus en Branche-RI&E',
+                     'risicocategorieen': 'Hoofdstuk 4: Risicocategorieën en Kwantificering',
+                     'primairProcessen': 'Hoofdstuk 5: Primaire Processen in de Branche',
+                     'werkzaamheden': 'Hoofdstuk 6: Werkzaamheden en Functies',
+                     'verzuim': 'Hoofdstuk 7: Verzuim in de Branche',
+                     'beroepsziekten': 'Hoofdstuk 8: Beroepsziekten in de Branche',
+                     'gevaarlijkeStoffen': 'Hoofdstuk 9: Gevaarlijke Stoffen en Risico\'s',
+                     'risicomatrices': 'Hoofdstuk 10: Risicomatrices',
+                     'vooruitblik': 'Hoofdstuk 11: Vooruitblik en Speerpunten',
+                     'stappenplan': 'Hoofdstuk 12: Stappenplan voor een Preventieve Samenwerking'
+                   };
+                   
+                   // Progressief hoofdstukken toevoegen
+                   let hoofdstukIndex = 0;
+                   const alleHoofdstukken: Array<{titel: string, content: string}> = [];
+                   
+                   // Voeg inleiding toe als die er is
+                   if (data.inleiding) {
+                     alleHoofdstukken.push({ titel: data.inleiding, content: '' });
+                     setProgressieveHoofdstukken([{ titel: data.inleiding, content: '' }]);
+                   }
+                   
+                   const addHoofdstuk = () => {
+                     if (hoofdstukIndex < stappen.length) {
+                       const stap = stappen[hoofdstukIndex];
+                       const content = data[stap.dataKey];
+                       
+                       if (content) {
+                         const titel = hoofdstukTitels[stap.dataKey] || stap.naam;
+                         alleHoofdstukken.push({ titel, content });
+                         
+                         // Update state met alle hoofdstukken tot nu toe
+                         setProgressieveHoofdstukken([...alleHoofdstukken]);
+                         setAnalyseStap(hoofdstukIndex + 1);
+                         
+                         // Scroll naar nieuw hoofdstuk
+                         setTimeout(() => {
+                           const element = document.getElementById(`hoofdstuk-${hoofdstukIndex}`);
+                           if (element) {
+                             element.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                           }
+                         }, 100);
+                       }
+                       
+                       hoofdstukIndex++;
+                       if (hoofdstukIndex < stappen.length) {
+                         hoofdstukTimeout = setTimeout(addHoofdstuk, timingPerStap);
+                       } else {
+                         // Alle hoofdstukken zijn toegevoegd
+                         setAnalyseStap(12);
+                         setIsAnalyzingOrganisatie(false);
+                         
+                         // Build complete result voor opslaan
+                         let result = '';
+                         if (data.inleiding) result += `# ${data.inleiding}\n\n`;
+                         alleHoofdstukken.forEach(h => {
+                           if (h.content) {
+                             result += `## ${h.titel}\n\n${h.content}\n\n`;
+                           }
+                         });
+                         setOrganisatieAnalyseResultaat(result);
+                         
+                         // Save to Firestore as OrganisatieProfiel (na alle hoofdstukken)
+                         if (data && customer.id) {
+                           (async () => {
+                             try {
+                               // Transform data to OrganisatieProfiel format
+                               const profielData: Partial<OrganisatieProfiel> = {
+                                 organisatieNaam: customer.name,
+                                 website: customer.website || '',
+                                 volledigRapport: data.volledigRapport || result,
+                                 risicos: data.risicos || [],
+                                 processen: data.processen || [],
+                                 functies: data.functies || [],
+                                 geanalyseerdDoor: user.id,
+                                 createdAt: new Date().toISOString(),
+                                 updatedAt: new Date().toISOString()
+                               };
+                               
+                               await customerService.saveOrganisatieProfiel(customer.id, profielData);
+                               
+                               // Reload the profile to show it immediately
+                               const savedProfiel = await customerService.getOrganisatieProfiel(customer.id);
+                               if (savedProfiel) {
+                                 setOrganisatieProfiel(savedProfiel);
+                               }
+                               
+                               // Import locaties from OrganisatieProfiel if available
+                               if (data.locaties && Array.isArray(data.locaties)) {
+                                 const allRichtingLocaties = await richtingLocatiesService.getAllLocaties();
+                                 const currentLocations = await customerService.getLocations(customer.id);
+                                 
+                                 for (const profielLocatie of data.locaties) {
+                                   // Check if location already exists
+                                   const existingLoc = currentLocations.find(loc => 
+                                     loc.name === profielLocatie.naam && 
+                                     loc.address === profielLocatie.adres
+                                   );
+                                   
+                                   if (!existingLoc) {
+                                     // Find nearest Richting location
+                                     let richtingLocatieId: string | undefined;
+                                     let richtingLocatieNaam: string | undefined;
+                                     
+                                     if (profielLocatie.richtingLocatie) {
+                                       const matchingRichting = allRichtingLocaties.find(rl => 
+                                         rl.vestiging === profielLocatie.richtingLocatie
+                                       );
+                                       if (matchingRichting) {
+                                         richtingLocatieId = matchingRichting.id;
+                                         richtingLocatieNaam = matchingRichting.vestiging;
+                                       }
+                                     }
+                                     
+                                     const newLoc: Location = {
+                                       id: `loc_${Date.now()}_${Math.random()}`,
+                                       customerId: customer.id,
+                                       name: profielLocatie.naam || 'Locatie',
+                                       address: profielLocatie.adres || '',
+                                       city: profielLocatie.stad || '',
+                                       employeeCount: profielLocatie.aantalMedewerkers || undefined,
+                                       richtingLocatieId,
+                                       richtingLocatieNaam
+                                     };
+                                     
+                                     await customerService.addLocation(newLoc);
+                                     setLocations(prev => [...prev, newLoc]);
+                                   } else if (profielLocatie.aantalMedewerkers && !existingLoc.employeeCount) {
+                                     // Update existing location with employee count if missing
+                                     const updatedLoc = { ...existingLoc, employeeCount: profielLocatie.aantalMedewerkers };
+                                     await customerService.addLocation(updatedLoc);
+                                     setLocations(prev => prev.map(loc => loc.id === existingLoc.id ? updatedLoc : loc));
+                                   }
+                                 }
+                               }
+                             } catch (saveError) {
+                               console.error("Error saving organisatie profiel:", saveError);
+                             }
+                           })();
+                         }
+                       }
+                     }
+                   };
+                   
+                  // Start met eerste hoofdstuk
+                  hoofdstukTimeout = setTimeout(addHoofdstuk, timingPerStap);
+                    } catch (error: any) {
+                      // Clear any pending hoofdstuk timeouts
+                      if (hoofdstukTimeout) {
+                        clearTimeout(hoofdstukTimeout);
+                        hoofdstukTimeout = null;
+                      }
+                      console.error("❌ Organisatie analyse error:", error);
+                      const errorMessage = error.message || 'Onbekende fout';
+                      setOrganisatieAnalyseResultaat(`❌ Fout bij analyse: ${errorMessage}\n\nControleer de browser console voor meer details.`);
+                      setProgressieveHoofdstukken([]);
+                      setAnalyseStap(0);
+                    } finally {
+                      setIsAnalyzingOrganisatie(false);
+                    }
+                   }}
+                   className="bg-richting-orange text-white px-6 py-3 rounded-lg font-bold hover:bg-orange-600 transition-colors flex items-center gap-2"
+                 >
+                   <span>📊</span>
+                   <span>Genereer Publiek Organisatie Profiel</span>
+                 </button>
+               </div>
+             </div>
            </div>
          )}
 
@@ -1451,12 +2280,17 @@ const CustomerDetailView = ({
                </h4>
                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
                  {['psychisch', 'fysiek', 'overige'].map(cat => {
-                   const risicosInCat = organisatieProfiel.risicos.filter(r => r.categorie === cat);
+                   const risicosInCat = organisatieProfiel.risicos.filter(r => {
+                     // Check both exact match and case-insensitive match
+                     const rCategorie = (r.categorie || '').toLowerCase();
+                     return rCategorie === cat.toLowerCase();
+                   });
                    const gemiddeldeRisico = risicosInCat.length > 0
                      ? risicosInCat.reduce((sum, r) => {
                          const kans = convertKansToFineKinney(r.kans);
                          const effect = convertEffectToFineKinney(r.effect);
-                         return sum + (kans * effect);
+                         const risicogetal = kans * effect;
+                         return sum + risicogetal;
                        }, 0) / risicosInCat.length
                      : 0;
                    const categorieLabels = { 'psychisch': 'Psychisch', 'fysiek': 'Fysiek', 'overige': 'Overige' };
@@ -1486,8 +2320,6 @@ const CustomerDetailView = ({
                    .sort((a, b) => b.risicogetal - a.risicogetal)
                    .slice(0, 10)
                    .map(({ risico, kans, effect, risicogetal, prioriteitNiveau }) => {
-                     const prioriteitLabels = ['Zeer hoog', 'Hoog', 'Middel', 'Laag', 'Zeer laag'];
-                     const prioriteitColors = ['bg-red-100 text-red-700 border-red-300', 'bg-orange-100 text-orange-700 border-orange-300', 'bg-yellow-100 text-yellow-700 border-yellow-300', 'bg-blue-100 text-blue-700 border-blue-300', 'bg-green-100 text-green-700 border-green-300'];
                      const categorieColors = {
                        'psychisch': 'bg-purple-50 text-purple-700',
                        'fysiek': 'bg-blue-50 text-blue-700',
@@ -1508,9 +2340,7 @@ const CustomerDetailView = ({
                              <span className="font-bold text-slate-700">Risico: {risicogetal}</span>
                            </div>
                          </div>
-                         <span className={`px-3 py-1 rounded text-xs font-bold border ${prioriteitColors[prioriteitNiveau - 1]}`}>
-                           {prioriteitNiveau}. {prioriteitLabels[prioriteitNiveau - 1]}
-                         </span>
+                         {getPrioriteitBadge(prioriteitNiveau)}
                        </div>
                      );
                    })}
@@ -1547,9 +2377,6 @@ const CustomerDetailView = ({
                   })
                   .sort((a, b) => (a?.prioriteitNiveau || 5) - (b?.prioriteitNiveau || 5))
                   .map(({ proces, prioriteitNiveau, risicos }) => {
-                    const prioriteitLabels = ['Zeer hoog', 'Hoog', 'Middel', 'Laag', 'Zeer laag'];
-                    const prioriteitColors = ['bg-red-100 text-red-700', 'bg-orange-100 text-orange-700', 'bg-yellow-100 text-yellow-700', 'bg-blue-100 text-blue-700', 'bg-green-100 text-green-700'];
-                    
                     return (
                       <div 
                         key={proces.id} 
@@ -1561,9 +2388,9 @@ const CustomerDetailView = ({
                             <h5 className="font-bold text-base text-slate-900 group-hover:text-richting-orange transition-colors">{proces.naam}</h5>
                             <p className="text-sm text-gray-600 mt-1 line-clamp-2">{proces.beschrijving}</p>
                           </div>
-                          <span className={`px-3 py-1.5 rounded-lg text-xs font-bold border-2 ml-3 flex-shrink-0 ${prioriteitColors[prioriteitNiveau - 1]}`}>
-                            {prioriteitNiveau}. {prioriteitLabels[prioriteitNiveau - 1]}
-                          </span>
+                          <div className="ml-3 flex-shrink-0">
+                            {getPrioriteitBadge(prioriteitNiveau)}
+                          </div>
                         </div>
                         <div className="flex items-center gap-4 mt-3 pt-3 border-t border-gray-200">
                           <span className="text-xs text-gray-500 flex items-center gap-1">
@@ -1604,9 +2431,6 @@ const CustomerDetailView = ({
                   })
                   .sort((a, b) => (a?.prioriteitNiveau || 5) - (b?.prioriteitNiveau || 5))
                   .map(({ functie, prioriteitNiveau, risicos }) => {
-                    const prioriteitLabels = ['Zeer hoog', 'Hoog', 'Middel', 'Laag', 'Zeer laag'];
-                    const prioriteitColors = ['bg-red-100 text-red-700', 'bg-orange-100 text-orange-700', 'bg-yellow-100 text-yellow-700', 'bg-blue-100 text-blue-700', 'bg-green-100 text-green-700'];
-                    
                     return (
                       <div 
                         key={functie.id} 
@@ -1618,9 +2442,9 @@ const CustomerDetailView = ({
                             <h5 className="font-bold text-base text-slate-900 group-hover:text-richting-orange transition-colors">{functie.naam}</h5>
                             <p className="text-sm text-gray-600 mt-1 line-clamp-2">{functie.beschrijving}</p>
                           </div>
-                          <span className={`px-3 py-1.5 rounded-lg text-xs font-bold border-2 ml-3 flex-shrink-0 ${prioriteitColors[prioriteitNiveau - 1]}`}>
-                            {prioriteitNiveau}. {prioriteitLabels[prioriteitNiveau - 1]}
-                          </span>
+                          <div className="ml-3 flex-shrink-0">
+                            {getPrioriteitBadge(prioriteitNiveau)}
+                          </div>
                         </div>
                         {functie.fysiek !== undefined && functie.psychisch !== undefined && (
                           <div className="flex items-center gap-4 mt-2 mb-2">
@@ -1659,16 +2483,12 @@ const CustomerDetailView = ({
 
            {/* Volledig Rapport */}
            {organisatieProfiel.volledigRapport && (
-             <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 mb-6">
-               <h4 className="text-xl font-bold text-slate-900 mb-4 flex items-center gap-2">
+             <div className="bg-white rounded-xl shadow-md border border-gray-300 p-6 mb-6">
+               <h4 className="text-xl font-bold text-slate-900 mb-6 flex items-center gap-2 pb-3 border-b-2 border-richting-orange">
                  <span className="text-2xl">📄</span> Volledig Rapport
                </h4>
-               <div className="prose max-w-none">
-                 <div className="bg-gray-50 rounded-lg p-6 border border-gray-200 max-h-96 overflow-y-auto">
-                   <div className="text-sm text-gray-700 whitespace-pre-wrap font-sans">
-                     {organisatieProfiel.volledigRapport}
-                   </div>
-                 </div>
+               <div className="bg-white rounded-lg p-6 md:p-8 border border-gray-200 max-h-[800px] overflow-y-auto shadow-inner">
+                 <MarkdownRenderer content={organisatieProfiel.volledigRapport} />
                </div>
              </div>
            )}
@@ -1727,8 +2547,6 @@ const CustomerDetailView = ({
                                .map((data) => {
                                  if (!data) return null;
                                  const { risico, blootstelling, kans, effect, risicogetal, prioriteitNiveau } = data;
-                                 const prioriteitLabels = ['Zeer hoog', 'Hoog', 'Middel', 'Laag', 'Zeer laag'];
-                                 const prioriteitColors = ['bg-red-100 text-red-700 border-red-300', 'bg-orange-100 text-orange-700 border-orange-300', 'bg-yellow-100 text-yellow-700 border-yellow-300', 'bg-blue-100 text-blue-700 border-blue-300', 'bg-green-100 text-green-700 border-green-300'];
                                  const categorieColors = {
                                    'fysiek': 'bg-blue-50 text-blue-700',
                                    'psychisch': 'bg-purple-50 text-purple-700',
@@ -1748,9 +2566,7 @@ const CustomerDetailView = ({
                                      <td className="px-4 py-3 text-sm text-gray-700 font-medium">{effect}</td>
                                      <td className="px-4 py-3 text-sm font-bold text-richting-orange">{risicogetal}</td>
                                      <td className="px-4 py-3">
-                                       <span className={`px-3 py-1 rounded-lg text-xs font-bold border-2 ${prioriteitColors[prioriteitNiveau - 1]}`}>
-                                         {prioriteitNiveau}. {prioriteitLabels[prioriteitNiveau - 1]}
-                                       </span>
+                                       {getPrioriteitBadge(prioriteitNiveau)}
                                      </td>
                                    </tr>
                                  );
@@ -1846,8 +2662,6 @@ const CustomerDetailView = ({
                                .map((data) => {
                                  if (!data) return null;
                                  const { risico, blootstelling, kans, effect, risicogetal, prioriteitNiveau } = data;
-                                 const prioriteitLabels = ['Zeer hoog', 'Hoog', 'Middel', 'Laag', 'Zeer laag'];
-                                 const prioriteitColors = ['bg-red-100 text-red-700', 'bg-orange-100 text-orange-700', 'bg-yellow-100 text-yellow-700', 'bg-blue-100 text-blue-700', 'bg-green-100 text-green-700'];
                                  const categorieColors = {
                                    'fysiek': 'bg-blue-100 text-blue-700',
                                    'psychisch': 'bg-purple-100 text-purple-700',
@@ -1867,9 +2681,7 @@ const CustomerDetailView = ({
                                      <td className="px-4 py-3 text-sm text-gray-700 font-medium">{effect}</td>
                                      <td className="px-4 py-3 text-sm font-bold text-richting-orange">{risicogetal}</td>
                                      <td className="px-4 py-3">
-                                       <span className={`px-3 py-1 rounded-lg text-xs font-bold border-2 ${prioriteitColors[prioriteitNiveau - 1]}`}>
-                                         {prioriteitNiveau}. {prioriteitLabels[prioriteitNiveau - 1]}
-                                       </span>
+                                       {getPrioriteitBadge(prioriteitNiveau)}
                                      </td>
                                    </tr>
                                  );
@@ -3816,7 +4628,7 @@ const SettingsView = ({ user }: { user: User }) => {
                     onChange={(e) => setPromptName(e.target.value)}
                     disabled={user.role !== UserRole.ADMIN}
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-richting-orange focus:border-richting-orange disabled:bg-gray-100 disabled:cursor-not-allowed"
-                    placeholder="Bijv. Branche Analyse Prompt"
+                    placeholder="Bijv. Publiek Organisatie Profiel Prompt"
                   />
                 </div>
                 <div>
@@ -3827,7 +4639,7 @@ const SettingsView = ({ user }: { user: User }) => {
                     disabled={user.role !== UserRole.ADMIN}
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-richting-orange focus:border-richting-orange disabled:bg-gray-100 disabled:cursor-not-allowed"
                   >
-                    <option value="branche_analyse">Branche Analyse</option>
+                    <option value="branche_analyse">Publiek Organisatie Profiel</option>
                     <option value="publiek_cultuur_profiel">Publiek Cultuur Profiel</option>
                     <option value="other">Anders</option>
                   </select>
@@ -3872,7 +4684,7 @@ const SettingsView = ({ user }: { user: User }) => {
                       className="w-4 h-4 text-richting-orange border-gray-300 rounded focus:ring-richting-orange"
                     />
                     <label htmlFor="isActief" className="text-sm text-gray-700">
-                      Actief (alleen voor Branche Analyse / Publiek Cultuur Profiel)
+                      Actief (alleen voor Publiek Organisatie Profiel / Publiek Cultuur Profiel)
                     </label>
                   </div>
                 )}
@@ -3949,7 +4761,7 @@ const SettingsView = ({ user }: { user: User }) => {
                 return (
                   <div key={type} className="space-y-4">
                     <h4 className="text-md font-bold text-slate-700 uppercase tracking-wide">
-                      {type === 'branche_analyse' ? 'Branche Analyse' : type === 'publiek_cultuur_profiel' ? 'Publiek Cultuur Profiel' : 'Andere Prompts'}
+                      {type === 'branche_analyse' ? 'Publiek Organisatie Profiel' : type === 'publiek_cultuur_profiel' ? 'Publiek Cultuur Profiel' : 'Andere Prompts'}
                     </h4>
                     {typePrompts
                       .sort((a, b) => (b.versie || 0) - (a.versie || 0))
