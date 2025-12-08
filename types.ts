@@ -32,18 +32,6 @@ export interface Location {
   name: string; // e.g. "Hoofdkantoor"
   address: string;
   city: string;
-  employeeCount?: number; // Aantal medewerkers op deze locatie
-  richtingLocatieId?: string; // ID van de dichtstbijzijnde Richting locatie
-  richtingLocatieNaam?: string; // Naam van de dichtstbijzijnde Richting locatie
-}
-
-export interface RichtingLocatie {
-  id: string; // RichtingLocatieID
-  vestiging: string; // Vestiging naam
-  regio: string; // Regio (Noord, Oost, West, Zuid West, Zuid Oost, Midden)
-  volledigAdres: string; // Volledig Adres
-  latitude: number; // Opgeslagen Coordinaat Richting (latitude)
-  longitude: number; // Opgeslagen Coordinaat Richting (longitude)
 }
 
 export interface Customer {
@@ -55,9 +43,6 @@ export interface Customer {
   logoUrl?: string;
   assignedUserIds: string[]; // List of users who have access to this client
   createdAt: string;
-  employeeCount?: number; // Aantal medewerkers
-  hasRIE?: boolean; // Heeft Risico Inventarisatie & Evaluatie
-  notes?: string; // Extra notities/info
 }
 
 export enum DocType {
@@ -181,10 +166,11 @@ export interface Risico {
   id: string;
   naam: string;
   categorie: 'psychisch' | 'fysiek' | 'overige';
-  kans: number; // Fine & Kinney: 0.5, 1, 3, 6, 10 (Waarschijnlijkheid)
-  effect: number; // Fine & Kinney: 1, 3, 7, 15, 40 (Effect)
-  totaalScore?: number; // Oude berekening (niet meer gebruikt)
-  blootstelling?: number; // Blootstelling (B) waarde
+  kans: number; // Fine & Kinney: 0.5, 1, 3, 6, 10 (Waarschijnlijkheid/W)
+  effect: number; // Fine & Kinney: 1, 3, 7, 15, 40 (Effect/E)
+  blootstelling?: number; // Blootstelling (B) waarde, default 3
+  risicogetal: number; // Fine & Kinney: R = B × W × E (Berekend en opgeslagen)
+  prioriteit?: number; // Prioriteit niveau (1-5) op basis van risicogetal
 }
 
 export interface Proces {

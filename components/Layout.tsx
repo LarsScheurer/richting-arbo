@@ -2,10 +2,9 @@ import React, { useState } from 'react';
 import { User, UserRole } from '../types';
 import { authService } from '../services/firebase';
 
-// Logo URL - gebruik lokaal bestand als beschikbaar, anders fallback naar externe URL
-// Logo moet in public/assets/ staan of in assets/ (wordt geïmporteerd)
-const LOGO_URL = "/assets/richting-5-ringen-logo.png"; // Nieuw logo met 5 ringen (plaats in public/assets/)
-const FALLBACK_LOGO_URL = "https://wsrv.nl/?url=richting.nl/wp-content/uploads/2019/12/logo-richting.png&w=400&output=png";
+// Omdat we in deze omgeving geen lokale bestanden kunnen uploaden, 
+// halen we het officiele logo op via een image proxy. 
+const LOGO_URL = "https://wsrv.nl/?url=richting.nl/wp-content/uploads/2019/12/logo-richting.png&w=400&output=png";
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -16,14 +15,11 @@ interface LayoutProps {
 }
 
 export const RichtingLogo: React.FC<{ className?: string }> = ({ className = "h-10" }) => {
-  const [imgError, setImgError] = React.useState(false);
-  
   return (
     <img 
-      src={imgError ? FALLBACK_LOGO_URL : LOGO_URL}
+      src={LOGO_URL}
       alt="Richting" 
-      className={`${className} object-contain`}
-      onError={() => setImgError(true)}
+      className={`${className} object-contain`} 
     />
   );
 };
@@ -36,11 +32,9 @@ export const Layout: React.FC<LayoutProps> = ({ children, user, onLogout, curren
   const navItems = [
     { id: 'dashboard', label: 'De Krant', icon: '📰' },
     { id: 'customers', label: 'Klanten', icon: '💼' },
-    { id: 'regio', label: 'Regio & Sales', icon: '🗺️' },
     { id: 'knowledge', label: 'Kennisbank', icon: '📚' },
     { id: 'chat', label: 'Vraag het Gemini', icon: '✨' },
     { id: 'upload', label: 'Nieuwe Bron', icon: '➕' },
-    ...(user.role === UserRole.ADMIN ? [{ id: 'settings', label: 'Instellingen', icon: '⚙️' }] : []),
   ];
 
   const handleRoleSwitch = async (role: UserRole) => {
@@ -53,8 +47,8 @@ export const Layout: React.FC<LayoutProps> = ({ children, user, onLogout, curren
     <div className="min-h-screen bg-gray-50 flex flex-col md:flex-row font-sans text-slate-800">
       {/* Sidebar */}
       <aside className="w-full md:w-64 bg-white border-r border-gray-200 flex flex-col shadow-sm sticky top-0 h-auto md:h-screen z-10">
-        <div className="p-6 border-b border-gray-100 flex justify-center md:justify-start items-center">
-          <RichtingLogo className="h-12 md:h-16 w-auto" />
+        <div className="p-6 border-b border-gray-100 flex justify-center md:justify-start">
+          <RichtingLogo className="h-8 md:h-10 w-auto" />
         </div>
 
         <nav className="flex-1 p-4 space-y-2 overflow-y-auto">

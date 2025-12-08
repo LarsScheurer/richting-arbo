@@ -326,29 +326,17 @@ Hoofdstuk 2: SBI-codes en Bedrijfsinformatie
 Hoofdstuk 3: Arbocatalogus en Branche-RI&E
 - Geef een overzicht van de door de branche erkende arbo-instrumenten (Arbocatalogus, Branche-RI&E), inclusief hun status en directe hyperlinks.
 
-Hoofdstuk 4: Risicocategorieën en Kwantificering (Fine & Kinney Methodiek)
+Hoofdstuk 4: Risicocategorieën en Kwantificering
 - Presenteer een tabel met de belangrijkste risico's, onderverdeeld in 'Psychische risico's', 'Fysieke risico's', en 'Overige'.
-- Gebruik de Fine & Kinney methodiek voor risicokwantificering. De formule is: Risicogetal (R) = Blootstelling (B) × Kans (W) × Effect (E)
-- Tabel kolommen moeten zijn: Risico | Categorie | Blootstelling (B) | Kans (W) | Effect (E) | Risicogetal (R) | Prioriteit
-- Blootstelling (B): aantal personen blootgesteld (schaal 1-10, waarbij 1 = zeer weinig personen, 10 = zeer veel personen)
-- Kans (W): gebruik Fine & Kinney waarden: 0.5, 1, 3, 6, of 10 (waarbij 0.5 = zeer onwaarschijnlijk, 10 = zeer waarschijnlijk)
-- Effect (E): gebruik Fine & Kinney waarden: 1, 3, 7, 15, of 40 (waarbij 1 = verwaarloosbaar effect, 40 = catastrofaal effect)
-- Risicogetal (R) = B × W × E (bereken dit voor elk risico)
-- Prioriteit: bepaal op basis van R-waarde (R >= 400 = Zeer hoog, R >= 200 = Hoog, R >= 100 = Middel, R >= 50 = Laag, R < 50 = Zeer laag)
-- Toon onderaan de tabel de totaaltelling van alle risicogetallen (som van alle R-waarden).
+- Kwantificeer elk risico met een score voor Kans (1-5) en Effect (1-5) en bereken de totaalscore (Kans * Effect).
+- Toon onderaan de tabel de totaaltelling van alle risicoscores.
 - Licht in een korte alinea de berekende totaalscore en gemiddelde score toe, zoals vermeld in de inleiding.
 
 Hoofdstuk 5: Primaire Processen in de Branche
 - Beschrijf stapsgewijs de kernprocessen op de werkvloer die typerend zijn voor deze branche.
-- Voor elk proces: presenteer een risicotabel met dezelfde Fine & Kinney structuur als hoofdstuk 4.
-- Tabel kolommen: Risico | Categorie | Blootstelling (B) | Kans (W) | Effect (E) | Risicogetal (R) | Prioriteit
-- Gebruik dezelfde Fine & Kinney waarden en berekeningen als in hoofdstuk 4.
 
 Hoofdstuk 6: Werkzaamheden en Functies
 - Geef een overzicht van de meest voorkomende functies, inclusief een omschrijving en voorbeelden van taken.
-- Voor elke functie: presenteer een risicotabel met dezelfde Fine & Kinney structuur als hoofdstuk 4.
-- Tabel kolommen: Risico | Categorie | Blootstelling (B) | Kans (W) | Effect (E) | Risicogetal (R) | Prioriteit
-- Gebruik dezelfde Fine & Kinney waarden en berekeningen als in hoofdstuk 4.
 
 Hoofdstuk 7: Verzuim in de Branche
 - Analyseer het verzuim in de branche, benoem de belangrijkste oorzaken en vergelijk dit met het landelijk gemiddelde.
@@ -395,23 +383,16 @@ BELANGRIJK: Geef het antwoord ALLEEN in puur, geldig JSON formaat. Geen markdown
       "id": "risico_1",
       "naam": "...",
       "categorie": "psychisch|fysiek|overige",
-      "kans": 0.5|1|3|6|10,
-      "effect": 1|3|7|15|40,
-      "blootstelling": 1-10,
-      "risicogetal": blootstelling * kans * effect
+      "kans": 1-5,
+      "effect": 1-5,
+      "totaalScore": kans * effect
     }
   ],
   "processen": [
     {
       "id": "proces_1",
       "naam": "...",
-      "beschrijving": "...",
-      "risicos": [
-        {
-          "risicoId": "risico_1",
-          "blootstelling": 1-10
-        }
-      ]
+      "beschrijving": "..."
     }
   ],
   "functies": [
@@ -419,13 +400,7 @@ BELANGRIJK: Geef het antwoord ALLEEN in puur, geldig JSON formaat. Geen markdown
       "id": "functie_1",
       "naam": "...",
       "beschrijving": "...",
-      "taken": ["...", "..."],
-      "risicos": [
-        {
-          "risicoId": "risico_1",
-          "blootstelling": 1-10
-        }
-      ]
+      "taken": ["...", "..."]
     }
   ],
   "gevaarlijkeStoffen": [
@@ -899,139 +874,116 @@ Voer nu de analyse uit en geef het resultaat in het gevraagde JSON formaat.`;
             jsonStr = jsonMatch[0];
         }
         // Improved JSON repair: handle unescaped characters in string values more robustly
-        // Strategy: Use regex to find and fix control characters in string values
-        function sanitizeJsonString(str) {
-            // First, try to extract JSON object boundaries
-            const jsonMatch = str.match(/\{[\s\S]*\}/);
-            if (!jsonMatch) {
-                return str;
-            }
-            
-            let jsonContent = jsonMatch[0];
-            let result = '';
-            let inString = false;
-            let escapeNext = false;
-            
-            for (let i = 0; i < jsonContent.length; i++) {
-                const char = jsonContent[i];
-                const charCode = jsonContent.charCodeAt(i);
-                
-                // Handle escape sequences
-                if (escapeNext) {
-                    result += char;
-                    // Handle unicode escapes
-                    if (char === 'u' && i + 4 < jsonContent.length) {
-                        const unicodeSeq = jsonContent.substring(i + 1, i + 5);
-                        if (/^[0-9A-Fa-f]{4}$/.test(unicodeSeq)) {
-                            result += unicodeSeq;
-                            i += 4;
-                        }
-                    }
-                    escapeNext = false;
-                    continue;
+        // Strategy: iterate character by character and properly escape control characters inside strings
+        let repaired = '';
+        let inString = false;
+        let escapeNext = false;
+        for (let i = 0; i < jsonStr.length; i++) {
+            const char = jsonStr[i];
+            const charCode = jsonStr.charCodeAt(i);
+            if (escapeNext) {
+                // We're processing an escaped character
+                // Check if it's a valid escape sequence
+                const validEscapes = ['n', 'r', 't', 'b', 'f', '\\', '"', '/', 'u'];
+                if (validEscapes.includes(char)) {
+                    repaired += '\\' + char;
                 }
-                
-                if (char === '\\') {
-                    escapeNext = true;
-                    result += char;
-                    continue;
-                }
-                
-                // Track string boundaries (only if not escaped)
-                if (char === '"') {
-                    inString = !inString;
-                    result += char;
-                    continue;
-                }
-                
-                // Inside a string: sanitize control characters
-                if (inString) {
-                    // Control characters that need to be escaped or removed
-                    if (charCode >= 0x00 && charCode <= 0x1F) {
-                        // Convert common control characters to JSON escapes
-                        switch (char) {
-                            case '\n':
-                                result += '\\n';
-                                break;
-                            case '\r':
-                                result += '\\r';
-                                break;
-                            case '\t':
-                                result += '\\t';
-                                break;
-                            case '\b':
-                                result += '\\b';
-                                break;
-                            case '\f':
-                                result += '\\f';
-                                break;
-                            default:
-                                // Remove other control characters (they break JSON)
-                                continue;
-                        }
-                    }
-                    else if (charCode === 0x7F) {
-                        // DEL character - remove
-                        continue;
+                else if (char === 'u' && i + 4 < jsonStr.length) {
+                    // Unicode escape sequence \uXXXX
+                    const unicodeSeq = jsonStr.substring(i, i + 5);
+                    if (/^u[0-9A-Fa-f]{4}$/.test(unicodeSeq)) {
+                        repaired += '\\' + unicodeSeq;
+                        i += 4; // Skip the next 4 characters
                     }
                     else {
-                        result += char;
+                        // Invalid unicode escape, escape the backslash
+                        repaired += '\\\\u';
                     }
                 }
                 else {
-                    // Outside a string: keep as is
-                    result += char;
+                    // Invalid escape sequence - escape the backslash and keep the character
+                    repaired += '\\\\' + char;
+                }
+                escapeNext = false;
+                continue;
+            }
+            if (char === '\\') {
+                // Start of escape sequence
+                escapeNext = true;
+                continue;
+            }
+            if (char === '"') {
+                inString = !inString;
+                repaired += char;
+                continue;
+            }
+            if (inString) {
+                // Inside a string: escape control characters and special characters
+                if (char === '\n') {
+                    repaired += '\\n';
+                }
+                else if (char === '\r') {
+                    repaired += '\\r';
+                }
+                else if (char === '\t') {
+                    repaired += '\\t';
+                }
+                else if (char === '\b') {
+                    repaired += '\\b';
+                }
+                else if (char === '\f') {
+                    repaired += '\\f';
+                }
+                else if (char === '\\') {
+                    // Unescaped backslash in string - should be escaped
+                    repaired += '\\\\';
+                }
+                else if (char === '"') {
+                    // Unescaped quote in string - should be escaped
+                    repaired += '\\"';
+                }
+                else if (charCode >= 0x00 && charCode <= 0x1F) {
+                    // Control characters (except already handled ones) - remove or escape
+                    // For most control chars, we'll remove them
+                    continue;
+                }
+                else if (charCode === 0x7F) {
+                    // DEL character - remove
+                    continue;
+                }
+                else {
+                    repaired += char;
                 }
             }
-            
-            return result;
+            else {
+                // Outside a string: keep as is
+                repaired += char;
+            }
         }
-        
-        // First pass: sanitize the JSON string
-        jsonStr = sanitizeJsonString(jsonStr);
+        // If we ended with an escape sequence, close it properly
+        if (escapeNext) {
+            repaired += '\\\\';
+        }
+        jsonStr = repaired;
         let json;
         try {
             json = JSON.parse(jsonStr);
         }
         catch (parseError) {
-            console.error("JSON Parse Error (first attempt):", parseError.message);
+            console.error("JSON Parse Error:", parseError.message);
             const errorPos = (_a = parseError.message.match(/position (\d+)/)) === null || _a === void 0 ? void 0 : _a[1];
             if (errorPos) {
                 const pos = parseInt(errorPos);
                 console.error("JSON String (around error position):", jsonStr.substring(Math.max(0, pos - 100), pos + 100));
             }
-            
-            // Fallback: Try a more aggressive sanitization
-            try {
-                console.log("Attempting fallback JSON repair...");
-                // Remove all control characters except newlines, tabs, etc. that are already escaped
-                // This is a last resort - it might break some content but should allow parsing
-                let fallbackJson = jsonStr
-                    // Remove unescaped control characters (but keep \n, \r, \t, etc. that are already escaped)
-                    .replace(/(?<!\\)[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '')
-                    // Fix any double-escaped sequences
-                    .replace(/\\\\n/g, '\\n')
-                    .replace(/\\\\r/g, '\\r')
-                    .replace(/\\\\t/g, '\\t');
-                
-                json = JSON.parse(fallbackJson);
-                console.log("✅ Fallback JSON repair succeeded");
-            }
-            catch (fallbackError) {
-                console.error("JSON Parse Error (fallback also failed):", fallbackError.message);
-                console.error("JSON String (first 1000 chars):", jsonStr.substring(0, 1000));
-                console.error("JSON String (last 1000 chars):", jsonStr.substring(Math.max(0, jsonStr.length - 1000)));
-                
-                // Return a structured error response with CORS headers
-                res.status(500).json({
-                    error: "Failed to parse Gemini response as JSON",
-                    details: parseError.message,
-                    fallbackError: fallbackError.message,
-                    rawResponse: jsonStr.substring(0, 2000),
-                    responseLength: jsonStr.length
-                });
-                return;
-            }
+            console.error("JSON String (first 500 chars):", jsonStr.substring(0, 500));
+            // Return a structured error response with CORS headers
+            res.status(500).json({
+                error: "Failed to parse Gemini response as JSON",
+                details: parseError.message,
+                rawResponse: jsonStr.substring(0, 2000)
+            });
+            return;
         }
         // Add richtingLocatie to each location and to personeleOmvang
         if (json.locaties && Array.isArray(json.locaties)) {
