@@ -326,17 +326,29 @@ Hoofdstuk 2: SBI-codes en Bedrijfsinformatie
 Hoofdstuk 3: Arbocatalogus en Branche-RI&E
 - Geef een overzicht van de door de branche erkende arbo-instrumenten (Arbocatalogus, Branche-RI&E), inclusief hun status en directe hyperlinks.
 
-Hoofdstuk 4: Risicocategorieën en Kwantificering
+Hoofdstuk 4: Risicocategorieën en Kwantificering (Fine & Kinney Methodiek)
 - Presenteer een tabel met de belangrijkste risico's, onderverdeeld in 'Psychische risico's', 'Fysieke risico's', en 'Overige'.
-- Kwantificeer elk risico met een score voor Kans (1-5) en Effect (1-5) en bereken de totaalscore (Kans * Effect).
-- Toon onderaan de tabel de totaaltelling van alle risicoscores.
+- Gebruik de Fine & Kinney methodiek voor risicokwantificering. De formule is: Risicogetal (R) = Blootstelling (B) × Kans (W) × Effect (E)
+- Tabel kolommen moeten zijn: Risico | Categorie | Blootstelling (B) | Kans (W) | Effect (E) | Risicogetal (R) | Prioriteit
+- Blootstelling (B): aantal personen blootgesteld (schaal 1-10, waarbij 1 = zeer weinig personen, 10 = zeer veel personen)
+- Kans (W): gebruik Fine & Kinney waarden: 0.5, 1, 3, 6, of 10 (waarbij 0.5 = zeer onwaarschijnlijk, 10 = zeer waarschijnlijk)
+- Effect (E): gebruik Fine & Kinney waarden: 1, 3, 7, 15, of 40 (waarbij 1 = verwaarloosbaar effect, 40 = catastrofaal effect)
+- Risicogetal (R) = B × W × E (bereken dit voor elk risico)
+- Prioriteit: bepaal op basis van R-waarde (R >= 400 = Zeer hoog, R >= 200 = Hoog, R >= 100 = Middel, R >= 50 = Laag, R < 50 = Zeer laag)
+- Toon onderaan de tabel de totaaltelling van alle risicogetallen (som van alle R-waarden).
 - Licht in een korte alinea de berekende totaalscore en gemiddelde score toe, zoals vermeld in de inleiding.
 
 Hoofdstuk 5: Primaire Processen in de Branche
 - Beschrijf stapsgewijs de kernprocessen op de werkvloer die typerend zijn voor deze branche.
+- Voor elk proces: presenteer een risicotabel met dezelfde Fine & Kinney structuur als hoofdstuk 4.
+- Tabel kolommen: Risico | Categorie | Blootstelling (B) | Kans (W) | Effect (E) | Risicogetal (R) | Prioriteit
+- Gebruik dezelfde Fine & Kinney waarden en berekeningen als in hoofdstuk 4.
 
 Hoofdstuk 6: Werkzaamheden en Functies
 - Geef een overzicht van de meest voorkomende functies, inclusief een omschrijving en voorbeelden van taken.
+- Voor elke functie: presenteer een risicotabel met dezelfde Fine & Kinney structuur als hoofdstuk 4.
+- Tabel kolommen: Risico | Categorie | Blootstelling (B) | Kans (W) | Effect (E) | Risicogetal (R) | Prioriteit
+- Gebruik dezelfde Fine & Kinney waarden en berekeningen als in hoofdstuk 4.
 
 Hoofdstuk 7: Verzuim in de Branche
 - Analyseer het verzuim in de branche, benoem de belangrijkste oorzaken en vergelijk dit met het landelijk gemiddelde.
@@ -383,16 +395,23 @@ BELANGRIJK: Geef het antwoord ALLEEN in puur, geldig JSON formaat. Geen markdown
       "id": "risico_1",
       "naam": "...",
       "categorie": "psychisch|fysiek|overige",
-      "kans": 1-5,
-      "effect": 1-5,
-      "totaalScore": kans * effect
+      "kans": 0.5|1|3|6|10,
+      "effect": 1|3|7|15|40,
+      "blootstelling": 1-10,
+      "risicogetal": blootstelling * kans * effect
     }
   ],
   "processen": [
     {
       "id": "proces_1",
       "naam": "...",
-      "beschrijving": "..."
+      "beschrijving": "...",
+      "risicos": [
+        {
+          "risicoId": "risico_1",
+          "blootstelling": 1-10
+        }
+      ]
     }
   ],
   "functies": [
@@ -400,7 +419,13 @@ BELANGRIJK: Geef het antwoord ALLEEN in puur, geldig JSON formaat. Geen markdown
       "id": "functie_1",
       "naam": "...",
       "beschrijving": "...",
-      "taken": ["...", "..."]
+      "taken": ["...", "..."],
+      "risicos": [
+        {
+          "risicoId": "risico_1",
+          "blootstelling": 1-10
+        }
+      ]
     }
   ],
   "gevaarlijkeStoffen": [

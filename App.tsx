@@ -2832,14 +2832,50 @@ const CustomerDetailView = ({
                    </button>
                  </div>
                  <div className="p-6 overflow-y-auto max-h-[calc(90vh-120px)]">
-                   {selectedProces && (
-                     <>
-                       <div className="bg-blue-50 border-l-4 border-blue-500 p-4 rounded mb-6">
-                         <p className="text-sm text-gray-700 leading-relaxed">{selectedProces.beschrijving}</p>
-                       </div>
-                       <h4 className="font-bold text-slate-900 mb-4 text-lg flex items-center gap-2">
-                         <span>⚠️</span> Risico's ({selectedProces.risicos?.length || 0})
-                       </h4>
+                  {selectedProces && (
+                    <>
+                      <div className="bg-blue-50 border-l-4 border-blue-500 p-4 rounded mb-6">
+                        <p className="text-sm text-gray-700 leading-relaxed">{selectedProces.beschrijving}</p>
+                      </div>
+                      
+                      {/* Gerelateerde Functies */}
+                      {(() => {
+                        // Vind functies die dezelfde risico's hebben als dit proces
+                        const procesRisicoIds = selectedProces.risicos?.map(r => r.risicoId).filter(Boolean) || [];
+                        const gerelateerdeFuncties = organisatieProfiel.functies?.filter(functie => 
+                          functie.risicos?.some(fr => procesRisicoIds.includes(fr.risicoId))
+                        ) || [];
+                        
+                        if (gerelateerdeFuncties.length > 0) {
+                          return (
+                            <div className="mb-6">
+                              <h4 className="font-bold text-slate-900 mb-3 text-lg flex items-center gap-2">
+                                <span>👥</span> Gerelateerde Functies ({gerelateerdeFuncties.length})
+                              </h4>
+                              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                {gerelateerdeFuncties.map(functie => (
+                                  <div
+                                    key={functie.id}
+                                    onClick={() => { setSelectedProces(null); setSelectedFunctie(functie); }}
+                                    className="p-3 bg-gradient-to-r from-purple-50 to-white border-2 border-purple-200 rounded-lg cursor-pointer hover:border-purple-400 hover:shadow-md transition-all"
+                                  >
+                                    <h5 className="font-bold text-sm text-slate-900">{functie.naam}</h5>
+                                    <p className="text-xs text-gray-600 mt-1 line-clamp-2">{functie.beschrijving}</p>
+                                    <div className="mt-2 flex items-center gap-2">
+                                      <span className="text-xs text-gray-500">⚠️ {functie.risicos?.length || 0} risico's</span>
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          );
+                        }
+                        return null;
+                      })()}
+                      
+                      <h4 className="font-bold text-slate-900 mb-4 text-lg flex items-center gap-2">
+                        <span>⚠️</span> Risico's ({selectedProces.risicos?.length || 0})
+                      </h4>
                        <div className="overflow-x-auto border border-gray-200 rounded-lg">
                          <table className="min-w-full divide-y divide-gray-200">
                            <thead className="bg-gradient-to-r from-gray-100 to-gray-50">
@@ -2916,14 +2952,50 @@ const CustomerDetailView = ({
                        </div>
                      </>
                    )}
-                   {selectedFunctie && (
-                     <>
-                       <div className="bg-purple-50 border-l-4 border-purple-500 p-4 rounded mb-6">
-                         <p className="text-sm text-gray-700 leading-relaxed">{selectedFunctie.beschrijving}</p>
-                       </div>
-                       <h4 className="font-bold text-slate-900 mb-4 text-lg flex items-center gap-2">
-                         <span>📊</span> Functiebelasting
-                       </h4>
+                  {selectedFunctie && (
+                    <>
+                      <div className="bg-purple-50 border-l-4 border-purple-500 p-4 rounded mb-6">
+                        <p className="text-sm text-gray-700 leading-relaxed">{selectedFunctie.beschrijving}</p>
+                      </div>
+                      
+                      {/* Gerelateerde Processen */}
+                      {(() => {
+                        // Vind processen die dezelfde risico's hebben als deze functie
+                        const functieRisicoIds = selectedFunctie.risicos?.map(r => r.risicoId).filter(Boolean) || [];
+                        const gerelateerdeProcessen = organisatieProfiel.processen?.filter(proces => 
+                          proces.risicos?.some(pr => functieRisicoIds.includes(pr.risicoId))
+                        ) || [];
+                        
+                        if (gerelateerdeProcessen.length > 0) {
+                          return (
+                            <div className="mb-6">
+                              <h4 className="font-bold text-slate-900 mb-3 text-lg flex items-center gap-2">
+                                <span>⚙️</span> Gerelateerde Processen ({gerelateerdeProcessen.length})
+                              </h4>
+                              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                {gerelateerdeProcessen.map(proces => (
+                                  <div
+                                    key={proces.id}
+                                    onClick={() => { setSelectedFunctie(null); setSelectedProces(proces); }}
+                                    className="p-3 bg-gradient-to-r from-blue-50 to-white border-2 border-blue-200 rounded-lg cursor-pointer hover:border-blue-400 hover:shadow-md transition-all"
+                                  >
+                                    <h5 className="font-bold text-sm text-slate-900">{proces.naam}</h5>
+                                    <p className="text-xs text-gray-600 mt-1 line-clamp-2">{proces.beschrijving}</p>
+                                    <div className="mt-2 flex items-center gap-2">
+                                      <span className="text-xs text-gray-500">⚠️ {proces.risicos?.length || 0} risico's</span>
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          );
+                        }
+                        return null;
+                      })()}
+                      
+                      <h4 className="font-bold text-slate-900 mb-4 text-lg flex items-center gap-2">
+                        <span>📊</span> Functiebelasting
+                      </h4>
                        <div className="mb-6 grid grid-cols-2 gap-4">
                          <div className="bg-blue-50 border-2 border-blue-200 rounded-lg p-4">
                            <span className="text-xs text-gray-600 font-medium block mb-2">💪 Fysieke Belasting</span>
