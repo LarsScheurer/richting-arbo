@@ -108,6 +108,125 @@ const getPrioriteitBadge = (niveau: number, showNumber: boolean = true): React.R
   );
 };
 
+// Helper functie om prioriteit tekst te herkennen en converteren naar niveau
+const parsePrioriteitFromText = (text: string): number | null => {
+  if (!text) return null;
+  
+  const lowerText = text.toLowerCase().trim();
+  
+  // Check voor nummer (1-5) - kan voorkomen als "1", "1.", "Prioriteit 1", etc.
+  const numMatch = lowerText.match(/\b([1-5])\b/);
+  if (numMatch) {
+    const num = parseInt(numMatch[1]);
+    if (num >= 1 && num <= 5) return num;
+  }
+  
+  // Check voor tekst labels (case-insensitive, met of zonder spaties)
+  if (lowerText.includes('zeer hoog') || lowerText.includes('zeerhoog') || lowerText === 'zeer hoog' || lowerText === 'zeerhoog') return 1;
+  if ((lowerText.includes('hoog') || lowerText === 'hoog') && !lowerText.includes('zeer')) return 2;
+  if (lowerText.includes('middel') || lowerText.includes('gemiddeld') || lowerText === 'middel' || lowerText === 'gemiddeld') return 3;
+  if ((lowerText.includes('laag') || lowerText === 'laag') && !lowerText.includes('zeer')) return 4;
+  if (lowerText.includes('zeer laag') || lowerText.includes('zeerlaag') || lowerText === 'zeer laag' || lowerText === 'zeerlaag') return 5;
+  
+  return null;
+};
+
+// Helper functie om prioriteiten in tekst te vervangen door badges
+const replacePrioriteitenInText = (text: string): React.ReactNode[] => {
+  // Patronen om prioriteiten te vinden: "Prioriteit: Hoog", "Prioriteit 2", "Prioriteit: Zeer hoog", etc.
+  const prioriteitPatterns = [
+    /(?:Prioriteit|prioriteit|PRIORITEIT)[\s:]*([1-5]|zeer\s*hoog|hoog|middel|gemiddeld|laag|zeer\s*laag)/gi,
+    /([1-5])\.?\s*(?:Prioriteit|prioriteit|PRIORITEIT)/gi,
+    /\b([1-5])\.\s*(?:Zeer\s*hoog|Hoog|Middel|Gemiddeld|Laag|Zeer\s*laag)\b/gi,
+    /\b(Zeer\s*hoog|Hoog|Middel|Gemiddeld|Laag|Zeer\s*laag)\s*\(([1-5])\)/gi,
+  ];
+  
+  const parts: React.ReactNode[] = [];
+  let lastIndex = 0;
+  let keyCounter = 0;
+  
+  // Zoek alle matches
+  const matches: Array<{match: string, index: number, prioriteit: number}> = [];
+  
+  prioriteitPatterns.forEach(pattern => {
+    // Reset regex lastIndex voor elke pattern
+    pattern.lastIndex = 0;
+    let match;
+    while ((match = pattern.exec(text)) !== null) {
+      // Try to parse prioriteit from different capture groups
+      const prioriteit = parsePrioriteitFromText(match[1] || match[2] || match[0]);
+      if (prioriteit) {
+        matches.push({
+          match: match[0],
+          index: match.index,
+          prioriteit
+        });
+      }
+    }
+  });
+  
+  // Sorteer matches op index en verwijder duplicaten
+  matches.sort((a, b) => a.index - b.index);
+  const uniqueMatches = matches.filter((match, idx, arr) => {
+    // Remove overlapping matches (keep first one)
+    return idx === 0 || match.index >= arr[idx - 1].index + arr[idx - 1].match.length;
+  });
+  
+  // Bouw de parts array
+  uniqueMatches.forEach(({match, index, prioriteit}) => {
+    // Voeg tekst voor de match toe
+    if (index > lastIndex) {
+      const beforeText = text.substring(lastIndex, index);
+      if (beforeText) {
+        parts.push(
+          <span key={`text-${keyCounter++}`} dangerouslySetInnerHTML={{ 
+            __html: beforeText
+              .replace(/\*\*(.*?)\*\*/g, '<strong class="font-bold text-slate-900">$1</strong>')
+              .replace(/\*(.*?)\*/g, '<em class="italic">$1</em>')
+              .replace(/`(.*?)`/g, '<code class="bg-gray-200 px-1.5 py-0.5 rounded text-xs font-mono text-gray-800">$1</code>')
+          }} />
+        );
+      }
+    }
+    
+    // Voeg de badge toe
+    parts.push(
+      <span key={`badge-${keyCounter++}`} className="inline-block ml-1 mr-1">
+        {getPrioriteitBadge(prioriteit)}
+      </span>
+    );
+    
+    lastIndex = index + match.length;
+  });
+  
+  // Voeg resterende tekst toe
+  if (lastIndex < text.length) {
+    const remainingText = text.substring(lastIndex);
+    if (remainingText) {
+      parts.push(
+        <span key={`text-${keyCounter++}`} dangerouslySetInnerHTML={{ 
+          __html: remainingText
+            .replace(/\*\*(.*?)\*\*/g, '<strong class="font-bold text-slate-900">$1</strong>')
+            .replace(/\*(.*?)\*/g, '<em class="italic">$1</em>')
+            .replace(/`(.*?)`/g, '<code class="bg-gray-200 px-1.5 py-0.5 rounded text-xs font-mono text-gray-800">$1</code>')
+        }} />
+      );
+    }
+  }
+  
+  // Als er geen matches zijn, retourneer de originele tekst
+  if (parts.length === 0) {
+    return [<span key="text-0" dangerouslySetInnerHTML={{ 
+      __html: text
+        .replace(/\*\*(.*?)\*\*/g, '<strong class="font-bold text-slate-900">$1</strong>')
+        .replace(/\*(.*?)\*/g, '<em class="italic">$1</em>')
+        .replace(/`(.*?)`/g, '<code class="bg-gray-200 px-1.5 py-0.5 rounded text-xs font-mono text-gray-800">$1</code>')
+    }} />];
+  }
+  
+  return parts;
+};
+
 const getStatusLabel = (status: string) => {
   switch (status) {
     case 'active': return 'ACTIEF';
@@ -135,7 +254,20 @@ const MarkdownRenderer: React.FC<{ content: string }> = ({ content }) => {
       elements.push(
         <ul key={`list-${elements.length}`} className="list-disc list-outside space-y-2 mb-5 ml-6 pl-2">
           {listItems.map((item, idx) => {
-            const processedItem = item.trim()
+            const trimmedItem = item.trim();
+            const prioriteit = parsePrioriteitFromText(trimmedItem);
+            
+            if (prioriteit && /(?:Prioriteit|prioriteit|PRIORITEIT)/i.test(trimmedItem)) {
+              // Replace prioriteit text with badge
+              const prioriteitParts = replacePrioriteitenInText(trimmedItem);
+              return (
+                <li key={idx} className="text-gray-700 leading-relaxed text-base">
+                  {prioriteitParts}
+                </li>
+              );
+            }
+            
+            const processedItem = trimmedItem
               .replace(/\*\*(.*?)\*\*/g, '<strong class="font-semibold text-slate-900">$1</strong>')
               .replace(/\*(.*?)\*/g, '<em class="italic">$1</em>')
               .replace(/`(.*?)`/g, '<code class="bg-gray-200 px-1.5 py-0.5 rounded text-xs font-mono">$1</code>');
@@ -192,7 +324,30 @@ const MarkdownRenderer: React.FC<{ content: string }> = ({ content }) => {
                   {dataRows.map((row, rowIdx) => (
                     <tr key={rowIdx} className={`transition-colors ${rowIdx % 2 === 0 ? 'bg-white hover:bg-orange-50' : 'bg-gray-50 hover:bg-orange-50'}`}>
                       {row.slice(0, headers.length).map((cell, cellIdx) => {
-                        // Process cell content (remove markdown formatting)
+                        // Check if cell contains prioriteit
+                        const prioriteit = parsePrioriteitFromText(cell);
+                        
+                        if (prioriteit) {
+                          // Replace prioriteit text with badge
+                          const cellWithoutPrioriteit = cell.replace(/(?:Prioriteit|prioriteit|PRIORITEIT)[\s:]*([1-5]|zeer\s*hoog|hoog|middel|gemiddeld|laag|zeer\s*laag)/gi, '').trim();
+                          const hasOtherContent = cellWithoutPrioriteit.length > 0;
+                          
+                          return (
+                            <td key={cellIdx} className="border border-gray-300 px-4 py-3 text-sm text-gray-700 align-top">
+                              {hasOtherContent && (
+                                <span className="mr-2" dangerouslySetInnerHTML={{ 
+                                  __html: cellWithoutPrioriteit
+                                    .replace(/\*\*(.*?)\*\*/g, '<strong class="font-semibold text-slate-900">$1</strong>')
+                                    .replace(/\*(.*?)\*/g, '<em class="italic text-slate-700">$1</em>')
+                                    .replace(/`(.*?)`/g, '<code class="bg-gray-200 px-1.5 py-0.5 rounded text-xs font-mono text-gray-800">$1</code>')
+                                }} />
+                              )}
+                              {getPrioriteitBadge(prioriteit)}
+                            </td>
+                          );
+                        }
+                        
+                        // Process cell content normally (remove markdown formatting)
                         const processedCell = cell
                           .replace(/\*\*(.*?)\*\*/g, '<strong class="font-semibold text-slate-900">$1</strong>')
                           .replace(/\*(.*?)\*/g, '<em class="italic text-slate-700">$1</em>')
@@ -290,16 +445,31 @@ const MarkdownRenderer: React.FC<{ content: string }> = ({ content }) => {
       );
     } else if (trimmed) {
       flushList();
-      // Regular paragraph - check if it contains links
-      let processedText = trimmed
-        .replace(/\*\*(.*?)\*\*/g, '<strong class="font-bold text-slate-900">$1</strong>')
-        .replace(/\*(.*?)\*/g, '<em class="italic">$1</em>')
-        .replace(/`(.*?)`/g, '<code class="bg-gray-200 px-1.5 py-0.5 rounded text-xs font-mono text-gray-800">$1</code>')
-        .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer" class="text-richting-orange hover:text-orange-600 underline font-medium">$1</a>');
+      // Regular paragraph - check if it contains prioriteiten
+      const prioriteit = parsePrioriteitFromText(trimmed);
       
-      elements.push(
-        <p key={`p-${index}`} className="text-gray-700 leading-relaxed mb-4 text-base" dangerouslySetInnerHTML={{ __html: processedText }} />
-      );
+      if (prioriteit && /(?:Prioriteit|prioriteit|PRIORITEIT)/i.test(trimmed)) {
+        // Replace prioriteit text with badge
+        const textWithoutPrioriteit = trimmed.replace(/(?:Prioriteit|prioriteit|PRIORITEIT)[\s:]*([1-5]|zeer\s*hoog|hoog|middel|gemiddeld|laag|zeer\s*laag)/gi, '').trim();
+        const prioriteitParts = replacePrioriteitenInText(trimmed);
+        
+        elements.push(
+          <p key={`p-${index}`} className="text-gray-700 leading-relaxed mb-4 text-base">
+            {prioriteitParts}
+          </p>
+        );
+      } else {
+        // Regular paragraph - check if it contains links
+        let processedText = trimmed
+          .replace(/\*\*(.*?)\*\*/g, '<strong class="font-bold text-slate-900">$1</strong>')
+          .replace(/\*(.*?)\*/g, '<em class="italic">$1</em>')
+          .replace(/`(.*?)`/g, '<code class="bg-gray-200 px-1.5 py-0.5 rounded text-xs font-mono text-gray-800">$1</code>')
+          .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer" class="text-richting-orange hover:text-orange-600 underline font-medium">$1</a>');
+        
+        elements.push(
+          <p key={`p-${index}`} className="text-gray-700 leading-relaxed mb-4 text-base" dangerouslySetInnerHTML={{ __html: processedText }} />
+        );
+      }
     } else if (trimmed === '') {
       // Empty line - flush lists/tables if needed
       flushList();
@@ -333,6 +503,192 @@ const ensureUrl = (url: string) => {
   url = url.trim();
   if (url.startsWith('http://') || url.startsWith('https://')) return url;
   return `https://${url}`;
+}
+
+// Helper functie om afstand tussen twee coördinaten te berekenen (Haversine formule)
+const calculateDistance = (lat1: number, lon1: number, lat2: number, lon2: number): number => {
+  const R = 6371; // Straal van de aarde in kilometers
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a = 
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+    Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c; // Afstand in kilometers
+}
+
+// Helper functie om coördinaten te krijgen van een adres (via geocoding API)
+const geocodeAddress = async (address: string, city: string): Promise<{ lat: number; lng: number } | null> => {
+  try {
+    // Gebruik een gratis geocoding service (bijv. Nominatim van OpenStreetMap)
+    const query = encodeURIComponent(`${address}, ${city}, Nederland`);
+    const response = await fetch(`https://nominatim.openstreetmap.org/search?q=${query}&format=json&limit=1&countrycodes=nl`, {
+      headers: {
+        'User-Agent': 'RichtingKennisbank/1.0' // Vereist door Nominatim
+      }
+    });
+    
+    if (!response.ok) return null;
+    
+    const data = await response.json();
+    if (data && data.length > 0) {
+      return {
+        lat: parseFloat(data[0].lat),
+        lng: parseFloat(data[0].lon)
+      };
+    }
+  } catch (e) {
+    console.warn(`Geocoding failed for ${address}, ${city}:`, e);
+  }
+  return null;
+}
+
+// Helper functie om de dichtstbijzijnde Richting locatie te vinden
+const findNearestRichtingLocation = async (
+  loc: Location, 
+  allRichtingLocaties: RichtingLocatie[]
+): Promise<RichtingLocatie | null> => {
+  if (!loc.city) return null;
+
+  // Stap 1: Probeer geocoding voor de klant locatie
+  let customerCoords: { lat: number; lng: number } | null = null;
+  if (loc.address && loc.city) {
+    customerCoords = await geocodeAddress(loc.address, loc.city);
+  }
+
+  // Stap 2: Als we coördinaten hebben, gebruik afstand berekening
+  if (customerCoords) {
+    let nearest: RichtingLocatie | null = null;
+    let minDistance = Infinity;
+
+    for (const rl of allRichtingLocaties) {
+      if (rl.latitude && rl.longitude) {
+        const distance = calculateDistance(
+          customerCoords.lat,
+          customerCoords.lng,
+          rl.latitude,
+          rl.longitude
+        );
+        if (distance < minDistance) {
+          minDistance = distance;
+          nearest = rl;
+        }
+      }
+    }
+
+    if (nearest) {
+      console.log(`✅ Locatie "${loc.name}" (${loc.city}) gekoppeld aan ${nearest.vestiging} op basis van afstand (${minDistance.toFixed(1)} km)`);
+      return nearest;
+    }
+  }
+
+  // Stap 3: Fallback naar verbeterde tekst matching
+  const cityLower = loc.city.toLowerCase().trim();
+  
+  // Verbeterde matching logica met meer speciale gevallen
+  const cityMappings: Record<string, string[]> = {
+    'amsterdam': ['amsterdam', 'amstelveen', 'haarlem', 'zaandam'],
+    'rotterdam': ['rotterdam', 'schiedam', 'dordrecht', 'gouda', 'capelle aan den ijssel', 'capelle a/d ijssel'],
+    'den haag': ['den haag', 's-gravenhage', 'gravenhage', 'zoetermeer', 'delft', 'leiden', 'haarlem'],
+    'utrecht': ['utrecht', 'amersfoort', 'hilversum', 'zeist', 'nieuwegein'],
+    'eindhoven': ['eindhoven', 'helmond', 'tilburg', 'den bosch', 's-hertogenbosch', 'hertogenbosch'],
+    'groningen': ['groningen', 'assen', 'leeuwarden'],
+    'enschede': ['enschede', 'almelo', 'hengelo', 'zwolle'],
+    'maastricht': ['maastricht', 'heerlen', 'sittard', 'roermond', 'venlo'],
+    'arnhem': ['arnhem', 'nijmegen', 'apeldoorn', 'ede'],
+    'breda': ['breda', 'tilburg', 'roosendaal', 'bergen op zoom'],
+    'leeuwarden': ['leeuwarden', 'groningen', 'drachten'],
+    'zwolle': ['zwolle', 'kampen', 'deventer', 'apeldoorn'],
+    'haarlem': ['haarlem', 'amsterdam', 'alkmaar', 'zaandam'],
+    'almere': ['almere', 'amsterdam', 'hilversum'],
+    'apeldoorn': ['apeldoorn', 'arnhem', 'zwolle', 'deventer'],
+    'tilburg': ['tilburg', 'eindhoven', 'breda', 'den bosch'],
+    'nijmegen': ['nijmegen', 'arnhem', 'eindhoven'],
+    'enschede': ['enschede', 'almelo', 'hengelo'],
+    'haarlem': ['haarlem', 'amsterdam', 'alkmaar'],
+    'gouda': ['gouda', 'rotterdam', 'utrecht', 'den haag'],
+    'zoetermeer': ['zoetermeer', 'den haag', 'rotterdam', 'gouda'],
+    'delft': ['delft', 'den haag', 'rotterdam'],
+    'leiden': ['leiden', 'den haag', 'haarlem', 'amsterdam'],
+    'alkmaar': ['alkmaar', 'amsterdam', 'haarlem'],
+    'venlo': ['venlo', 'roermond', 'eindhoven'],
+    'heerlen': ['heerlen', 'maastricht', 'sittard'],
+    'sittard': ['sittard', 'maastricht', 'heerlen'],
+    'roermond': ['roermond', 'venlo', 'maastricht'],
+    'den bosch': ['den bosch', 's-hertogenbosch', 'hertogenbosch', 'eindhoven', 'tilburg'],
+    's-hertogenbosch': ['s-hertogenbosch', 'hertogenbosch', 'den bosch', 'eindhoven'],
+    'hertogenbosch': ['hertogenbosch', 's-hertogenbosch', 'den bosch', 'eindhoven'],
+    'capelle aan den ijssel': ['capelle aan den ijssel', 'capelle a/d ijssel', 'rotterdam', 'gouda'],
+    'capelle a/d ijssel': ['capelle a/d ijssel', 'capelle aan den ijssel', 'rotterdam', 'gouda'],
+    'barendrecht': ['barendrecht', 'rotterdam', 'dordrecht'],
+    'dordrecht': ['dordrecht', 'rotterdam', 'gouda'],
+    'schiedam': ['schiedam', 'rotterdam', 'den haag'],
+    'amstelveen': ['amstelveen', 'amsterdam', 'haarlem'],
+    'zaandam': ['zaandam', 'amsterdam', 'haarlem'],
+    'hilversum': ['hilversum', 'amsterdam', 'utrecht'],
+    'amersfoort': ['amersfoort', 'utrecht', 'hilversum'],
+    'nieuwegein': ['nieuwegein', 'utrecht', 'gouda'],
+    'zeist': ['zeist', 'utrecht', 'hilversum'],
+    'deventer': ['deventer', 'zwolle', 'apeldoorn'],
+    'kampen': ['kampen', 'zwolle', 'apeldoorn'],
+    'helmond': ['helmond', 'eindhoven', 'tilburg'],
+    'roosendaal': ['roosendaal', 'breda', 'rotterdam'],
+    'bergen op zoom': ['bergen op zoom', 'breda', 'rotterdam'],
+    'drachten': ['drachten', 'leeuwarden', 'groningen'],
+    'assen': ['assen', 'groningen', 'zwolle'],
+    'almelo': ['almelo', 'enschede', 'zwolle'],
+    'hengelo': ['hengelo', 'enschede', 'almelo']
+  };
+
+  // Zoek eerst op exacte match
+  for (const rl of allRichtingLocaties) {
+    const vestigingLower = rl.vestiging.toLowerCase().trim();
+    const adresLower = rl.volledigAdres.toLowerCase();
+    
+    // Exacte match op stad naam
+    if (cityLower === vestigingLower) {
+      console.log(`✅ Locatie "${loc.name}" (${loc.city}) gekoppeld aan ${rl.vestiging} (exacte match)`);
+      return rl;
+    }
+    
+    // Stad naam bevat vestiging naam of vice versa
+    if (cityLower.includes(vestigingLower) || vestigingLower.includes(cityLower)) {
+      console.log(`✅ Locatie "${loc.name}" (${loc.city}) gekoppeld aan ${rl.vestiging} (naam match)`);
+      return rl;
+    }
+    
+    // Stad naam in adres
+    if (adresLower.includes(cityLower)) {
+      console.log(`✅ Locatie "${loc.name}" (${loc.city}) gekoppeld aan ${rl.vestiging} (adres match)`);
+      return rl;
+    }
+    
+    // Vestiging naam in adres van locatie
+    if (loc.address && loc.address.toLowerCase().includes(vestigingLower)) {
+      console.log(`✅ Locatie "${loc.name}" (${loc.city}) gekoppeld aan ${rl.vestiging} (adres bevat vestiging)`);
+      return rl;
+    }
+  }
+
+  // Zoek op city mappings
+  for (const [cityKey, relatedCities] of Object.entries(cityMappings)) {
+    if (cityLower.includes(cityKey) || cityKey.includes(cityLower)) {
+      for (const rl of allRichtingLocaties) {
+        const vestigingLower = rl.vestiging.toLowerCase().trim();
+        const adresLower = rl.volledigAdres.toLowerCase();
+        
+        for (const relatedCity of relatedCities) {
+          if (vestigingLower.includes(relatedCity) || adresLower.includes(relatedCity)) {
+            console.log(`✅ Locatie "${loc.name}" (${loc.city}) gekoppeld aan ${rl.vestiging} (city mapping: ${cityKey} -> ${relatedCity})`);
+            return rl;
+          }
+        }
+      }
+    }
+  }
+
+  return null;
 }
 
 const getCompanyLogoUrl = (websiteUrl: string | undefined) => {
@@ -625,46 +981,8 @@ const CustomerDetailView = ({
            
            for (const loc of locs) {
              if (!loc.richtingLocatieId && loc.city) {
-               // Verbeterde matching logica
-               const matchingLocatie = allRichtingLocaties.find(rl => {
-                 const cityLower = loc.city.toLowerCase().trim();
-                 const vestigingLower = rl.vestiging.toLowerCase().trim();
-                 const adresLower = rl.volledigAdres.toLowerCase();
-                 
-                 // Exacte match op stad naam
-                 if (cityLower === vestigingLower) return true;
-                 
-                 // Stad naam bevat vestiging naam of vice versa
-                 if (cityLower.includes(vestigingLower) || vestigingLower.includes(cityLower)) return true;
-                 
-                 // Stad naam in adres
-                 if (adresLower.includes(cityLower)) return true;
-                 
-                 // Vestiging naam in adres van locatie
-                 if (loc.address && loc.address.toLowerCase().includes(vestigingLower)) return true;
-                 
-                 // Speciale gevallen
-                 const specialCases: Record<string, string[]> = {
-                   'den haag': ['s-gravenhage', 'gravenhage'],
-                   'den bosch': ['s-hertogenbosch', 'hertogenbosch', "'s-hertogenbosch"],
-                   'capelle aan den ijssel': ['capelle'],
-                   'capelle a/d ijssel': ['capelle'],
-                   'amsterdam': ['amsterdam'],
-                   'zoeterwoude': ['zoetermeer', 'den haag'], // Zoeterwoude is dichtbij Zoetermeer/Den Haag
-                   'hazerswoude-rijndijk': ['zoetermeer', 'den haag'],
-                   'wijlre': ['venlo', 'maastricht'] // Wijlre is in Limburg
-                 };
-                 
-                 for (const [key, aliases] of Object.entries(specialCases)) {
-                   if (cityLower.includes(key) || key.includes(cityLower)) {
-                     if (aliases.some(alias => vestigingLower.includes(alias) || adresLower.includes(alias))) {
-                       return true;
-                     }
-                   }
-                 }
-                 
-                 return false;
-               });
+               // Gebruik de verbeterde findNearestRichtingLocation functie
+               const matchingLocatie = await findNearestRichtingLocation(loc, allRichtingLocaties);
                
                if (matchingLocatie) {
                  const updatedLoc: Location = {
@@ -677,7 +995,6 @@ const CustomerDetailView = ({
                    await customerService.addLocation(updatedLoc);
                    updatedLocations.push(updatedLoc);
                    linkedCount++;
-                   console.log(`✅ Locatie "${loc.name}" (${loc.city}) gekoppeld aan ${matchingLocatie.vestiging}`);
                  } catch (e) {
                    console.error(`Error updating location ${loc.id}:`, e);
                    updatedLocations.push(loc);
@@ -727,48 +1044,10 @@ const CustomerDetailView = ({
       employeeCount: locEmployeeCount
     };
     
-    // Try to find nearest Richting location based on city name
-    // This is a fallback - ideally we'd use coordinates
+    // Try to find nearest Richting location using improved matching
     try {
       const allRichtingLocaties = await richtingLocatiesService.getAllLocaties();
-      // Verbeterde matching logica (zelfde als in RegioView)
-      const matchingLocatie = allRichtingLocaties.find(rl => {
-        if (!locCity) return false;
-        
-        const cityLower = locCity.toLowerCase().trim();
-        const vestigingLower = rl.vestiging.toLowerCase().trim();
-        const adresLower = rl.volledigAdres.toLowerCase();
-        
-        // Exacte match op stad naam
-        if (cityLower === vestigingLower) return true;
-        
-        // Stad naam bevat vestiging naam of vice versa
-        if (cityLower.includes(vestigingLower) || vestigingLower.includes(cityLower)) return true;
-        
-        // Stad naam in adres
-        if (adresLower.includes(cityLower)) return true;
-        
-        // Vestiging naam in adres van locatie
-        if (locAddress && locAddress.toLowerCase().includes(vestigingLower)) return true;
-        
-        // Speciale gevallen
-        const specialCases: Record<string, string[]> = {
-          'den haag': ['s-gravenhage', 'gravenhage'],
-          'den bosch': ['s-hertogenbosch', 'hertogenbosch', "'s-hertogenbosch"],
-          'capelle aan den ijssel': ['capelle'],
-          'capelle a/d ijssel': ['capelle']
-        };
-        
-        for (const [key, aliases] of Object.entries(specialCases)) {
-          if (cityLower.includes(key) || key.includes(cityLower)) {
-            if (aliases.some(alias => vestigingLower.includes(alias) || adresLower.includes(alias))) {
-              return true;
-            }
-          }
-        }
-        
-        return false;
-      });
+      const matchingLocatie = await findNearestRichtingLocation(newLoc, allRichtingLocaties);
       
       if (matchingLocatie) {
         newLoc.richtingLocatieId = matchingLocatie.id;
@@ -1528,30 +1807,38 @@ const CustomerDetailView = ({
                                    );
                                    
                                    if (!existingLoc) {
-                                     // Find nearest Richting location
-                                     let richtingLocatieId: string | undefined;
-                                     let richtingLocatieNaam: string | undefined;
-                                     
-                                     if (profielLocatie.richtingLocatie) {
-                                       const matchingRichting = allRichtingLocaties.find(rl => 
-                                         rl.vestiging === profielLocatie.richtingLocatie
-                                       );
-                                       if (matchingRichting) {
-                                         richtingLocatieId = matchingRichting.id;
-                                         richtingLocatieNaam = matchingRichting.vestiging;
-                                       }
-                                     }
-                                     
                                      const newLoc: Location = {
                                        id: `loc_${Date.now()}_${Math.random()}`,
                                        customerId: customer.id,
                                        name: profielLocatie.naam || 'Locatie',
                                        address: profielLocatie.adres || '',
                                        city: profielLocatie.stad || '',
-                                       employeeCount: profielLocatie.aantalMedewerkers || undefined,
-                                       richtingLocatieId,
-                                       richtingLocatieNaam
+                                       employeeCount: profielLocatie.aantalMedewerkers || undefined
                                      };
+                                     
+                                     // Find nearest Richting location using improved matching
+                                     if (newLoc.city || profielLocatie.richtingLocatie) {
+                                       // Eerst proberen exacte match op naam als die is opgegeven
+                                       if (profielLocatie.richtingLocatie) {
+                                         const exactMatch = allRichtingLocaties.find(rl => 
+                                           rl.vestiging === profielLocatie.richtingLocatie ||
+                                           rl.vestiging.toLowerCase() === profielLocatie.richtingLocatie.toLowerCase()
+                                         );
+                                         if (exactMatch) {
+                                           newLoc.richtingLocatieId = exactMatch.id;
+                                           newLoc.richtingLocatieNaam = exactMatch.vestiging;
+                                         }
+                                       }
+                                       
+                                       // Als geen exacte match, gebruik findNearestRichtingLocation
+                                       if (!newLoc.richtingLocatieId && newLoc.city) {
+                                         const matchingLocatie = await findNearestRichtingLocation(newLoc, allRichtingLocaties);
+                                         if (matchingLocatie) {
+                                           newLoc.richtingLocatieId = matchingLocatie.id;
+                                           newLoc.richtingLocatieNaam = matchingLocatie.vestiging;
+                                         }
+                                       }
+                                     }
                                      
                                      await customerService.addLocation(newLoc);
                                      setLocations(prev => [...prev, newLoc]);
@@ -2090,30 +2377,38 @@ const CustomerDetailView = ({
                                    );
                                    
                                    if (!existingLoc) {
-                                     // Find nearest Richting location
-                                     let richtingLocatieId: string | undefined;
-                                     let richtingLocatieNaam: string | undefined;
-                                     
-                                     if (profielLocatie.richtingLocatie) {
-                                       const matchingRichting = allRichtingLocaties.find(rl => 
-                                         rl.vestiging === profielLocatie.richtingLocatie
-                                       );
-                                       if (matchingRichting) {
-                                         richtingLocatieId = matchingRichting.id;
-                                         richtingLocatieNaam = matchingRichting.vestiging;
-                                       }
-                                     }
-                                     
                                      const newLoc: Location = {
                                        id: `loc_${Date.now()}_${Math.random()}`,
                                        customerId: customer.id,
                                        name: profielLocatie.naam || 'Locatie',
                                        address: profielLocatie.adres || '',
                                        city: profielLocatie.stad || '',
-                                       employeeCount: profielLocatie.aantalMedewerkers || undefined,
-                                       richtingLocatieId,
-                                       richtingLocatieNaam
+                                       employeeCount: profielLocatie.aantalMedewerkers || undefined
                                      };
+                                     
+                                     // Find nearest Richting location using improved matching
+                                     if (newLoc.city || profielLocatie.richtingLocatie) {
+                                       // Eerst proberen exacte match op naam als die is opgegeven
+                                       if (profielLocatie.richtingLocatie) {
+                                         const exactMatch = allRichtingLocaties.find(rl => 
+                                           rl.vestiging === profielLocatie.richtingLocatie ||
+                                           rl.vestiging.toLowerCase() === profielLocatie.richtingLocatie.toLowerCase()
+                                         );
+                                         if (exactMatch) {
+                                           newLoc.richtingLocatieId = exactMatch.id;
+                                           newLoc.richtingLocatieNaam = exactMatch.vestiging;
+                                         }
+                                       }
+                                       
+                                       // Als geen exacte match, gebruik findNearestRichtingLocation
+                                       if (!newLoc.richtingLocatieId && newLoc.city) {
+                                         const matchingLocatie = await findNearestRichtingLocation(newLoc, allRichtingLocaties);
+                                         if (matchingLocatie) {
+                                           newLoc.richtingLocatieId = matchingLocatie.id;
+                                           newLoc.richtingLocatieNaam = matchingLocatie.vestiging;
+                                         }
+                                       }
+                                     }
                                      
                                      await customerService.addLocation(newLoc);
                                      setLocations(prev => [...prev, newLoc]);
@@ -2361,8 +2656,20 @@ const CustomerDetailView = ({
                     const risicos = proces.risicos || [];
                     // Bereken prioriteit voor dit proces
                     const risicosMetBerekening = risicos.map(item => {
-                      const risico = item.risico || organisatieProfiel.risicos.find(r => r.id === item.risicoId);
-                      if (!risico) return null;
+                      // Probeer eerst item.risico, dan zoek in organisatieProfiel.risicos
+                      let risico = item.risico;
+                      if (!risico && item.risicoId) {
+                        risico = organisatieProfiel.risicos?.find(r => r.id === item.risicoId);
+                      }
+                      // Als nog steeds geen risico gevonden, probeer op naam te matchen
+                      if (!risico && item.risicoId && organisatieProfiel.risicos) {
+                        // Soms is risicoId een naam in plaats van een ID
+                        risico = organisatieProfiel.risicos.find(r => r.naam === item.risicoId || r.id === item.risicoId);
+                      }
+                      if (!risico) {
+                        console.warn(`⚠️ Risico niet gevonden voor proces ${proces.naam}: risicoId=${item.risicoId}`);
+                        return null;
+                      }
                       const blootstelling = item.blootstelling || 3;
                       const kans = convertKansToFineKinney(risico.kans);
                       const effect = convertEffectToFineKinney(risico.effect);
@@ -2373,10 +2680,12 @@ const CustomerDetailView = ({
                       ? risicosMetBerekening.reduce((sum, r) => sum + (r?.risicogetal || 0), 0) / risicosMetBerekening.length
                       : 0;
                     const prioriteitNiveau = gemiddeldePrioriteit >= 400 ? 1 : gemiddeldePrioriteit >= 200 ? 2 : gemiddeldePrioriteit >= 100 ? 3 : gemiddeldePrioriteit >= 50 ? 4 : 5;
-                    return { proces, prioriteitNiveau, risicos };
+                    // Gebruik risicosMetBerekening.length voor het aantal gevonden risico's
+                    const aantalRisicos = risicosMetBerekening.length;
+                    return { proces, prioriteitNiveau, risicos, aantalRisicos };
                   })
                   .sort((a, b) => (a?.prioriteitNiveau || 5) - (b?.prioriteitNiveau || 5))
-                  .map(({ proces, prioriteitNiveau, risicos }) => {
+                  .map(({ proces, prioriteitNiveau, risicos, aantalRisicos }) => {
                     return (
                       <div 
                         key={proces.id} 
@@ -2394,7 +2703,7 @@ const CustomerDetailView = ({
                         </div>
                         <div className="flex items-center gap-4 mt-3 pt-3 border-t border-gray-200">
                           <span className="text-xs text-gray-500 flex items-center gap-1">
-                            <span className="text-richting-orange">⚠️</span> {risicos.length} risico{risicos.length !== 1 ? "'s" : ""}
+                            <span className="text-richting-orange">⚠️</span> {aantalRisicos} risico{aantalRisicos !== 1 ? "'s" : ""}
                           </span>
                           <span className="text-xs text-richting-orange font-medium group-hover:underline">Details bekijken →</span>
                         </div>
@@ -2415,8 +2724,20 @@ const CustomerDetailView = ({
                     const risicos = functie.risicos || [];
                     // Bereken prioriteit voor deze functie
                     const risicosMetBerekening = risicos.map(item => {
-                      const risico = item.risico || organisatieProfiel.risicos.find(r => r.id === item.risicoId);
-                      if (!risico) return null;
+                      // Probeer eerst item.risico, dan zoek in organisatieProfiel.risicos
+                      let risico = item.risico;
+                      if (!risico && item.risicoId) {
+                        risico = organisatieProfiel.risicos?.find(r => r.id === item.risicoId);
+                      }
+                      // Als nog steeds geen risico gevonden, probeer op naam te matchen
+                      if (!risico && item.risicoId && organisatieProfiel.risicos) {
+                        // Soms is risicoId een naam in plaats van een ID
+                        risico = organisatieProfiel.risicos.find(r => r.naam === item.risicoId || r.id === item.risicoId);
+                      }
+                      if (!risico) {
+                        console.warn(`⚠️ Risico niet gevonden voor functie ${functie.naam}: risicoId=${item.risicoId}`);
+                        return null;
+                      }
                       const blootstelling = item.blootstelling || 3;
                       const kans = convertKansToFineKinney(risico.kans);
                       const effect = convertEffectToFineKinney(risico.effect);
@@ -2427,10 +2748,12 @@ const CustomerDetailView = ({
                       ? risicosMetBerekening.reduce((sum, r) => sum + (r?.risicogetal || 0), 0) / risicosMetBerekening.length
                       : 0;
                     const prioriteitNiveau = gemiddeldePrioriteit >= 400 ? 1 : gemiddeldePrioriteit >= 200 ? 2 : gemiddeldePrioriteit >= 100 ? 3 : gemiddeldePrioriteit >= 50 ? 4 : 5;
-                    return { functie, prioriteitNiveau, risicos };
+                    // Gebruik risicosMetBerekening.length voor het aantal gevonden risico's
+                    const aantalRisicos = risicosMetBerekening.length;
+                    return { functie, prioriteitNiveau, risicos, aantalRisicos };
                   })
                   .sort((a, b) => (a?.prioriteitNiveau || 5) - (b?.prioriteitNiveau || 5))
-                  .map(({ functie, prioriteitNiveau, risicos }) => {
+                  .map(({ functie, prioriteitNiveau, risicos, aantalRisicos }) => {
                     return (
                       <div 
                         key={functie.id} 
@@ -2470,7 +2793,7 @@ const CustomerDetailView = ({
                         )}
                         <div className="flex items-center gap-4 mt-3 pt-3 border-t border-gray-200">
                           <span className="text-xs text-gray-500 flex items-center gap-1">
-                            <span className="text-richting-orange">⚠️</span> {risicos.length} risico{risicos.length !== 1 ? "'s" : ""}
+                            <span className="text-richting-orange">⚠️</span> {aantalRisicos} risico{aantalRisicos !== 1 ? "'s" : ""}
                           </span>
                           <span className="text-xs text-richting-orange font-medium group-hover:underline">Details bekijken →</span>
                         </div>
@@ -3698,45 +4021,8 @@ const RegioView = ({ user }: { user: User }) => {
         
         for (const loc of allCustomerLocations) {
           if (!loc.richtingLocatieId && loc.city) {
-            // Verbeterde matching logica
-            const matchingLocatie = locaties.find(rl => {
-              const cityLower = loc.city.toLowerCase().trim();
-              const vestigingLower = rl.vestiging.toLowerCase().trim();
-              const adresLower = rl.volledigAdres.toLowerCase();
-              
-              // Exacte match op stad naam
-              if (cityLower === vestigingLower) return true;
-              
-              // Stad naam bevat vestiging naam of vice versa
-              if (cityLower.includes(vestigingLower) || vestigingLower.includes(cityLower)) return true;
-              
-              // Stad naam in adres
-              if (adresLower.includes(cityLower)) return true;
-              
-              // Vestiging naam in adres van locatie (als beschikbaar)
-              if (loc.address && loc.address.toLowerCase().includes(vestigingLower)) return true;
-              
-              // Speciale gevallen: "Den Haag" = "s-Gravenhage, "s-Hertogenbosch = Den Bosch, etc.
-              const specialCases: Record<string, string[]> = {
-                'den haag': ['s-gravenhage', 'gravenhage'],
-                'den bosch': ['s-hertogenbosch', 'hertogenbosch', "'s-hertogenbosch"],
-                'capelle aan den ijssel': ['capelle'],
-                'capelle a/d ijssel': ['capelle'],
-                'amsterdam': ['amsterdam'],
-                'rotterdam': ['rotterdam'],
-                'utrecht': ['utrecht']
-              };
-              
-              for (const [key, aliases] of Object.entries(specialCases)) {
-                if (cityLower.includes(key) || key.includes(cityLower)) {
-                  if (aliases.some(alias => vestigingLower.includes(alias) || adresLower.includes(alias))) {
-                    return true;
-                  }
-                }
-              }
-              
-              return false;
-            });
+            // Gebruik de verbeterde findNearestRichtingLocation functie
+            const matchingLocatie = await findNearestRichtingLocation(loc, locaties);
             
             if (matchingLocatie) {
               const updatedLoc: Location = {
