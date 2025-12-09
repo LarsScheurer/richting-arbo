@@ -1712,14 +1712,78 @@ const CustomerDetailView = ({
 
            {/* Volledig Rapport */}
            {organisatieProfiel.volledigRapport && (
-             <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 mb-6">
-               <h4 className="text-xl font-bold text-slate-900 mb-4 flex items-center gap-2">
-                 <span className="text-2xl">📄</span> Volledig Rapport
-               </h4>
-               <div className="prose max-w-none">
-                 <div className="bg-gray-50 rounded-lg p-6 border border-gray-200 max-h-96 overflow-y-auto">
-                   <div className="text-sm text-gray-700 whitespace-pre-wrap font-sans">
-                     {organisatieProfiel.volledigRapport}
+             <div className="bg-white rounded-xl shadow-lg border border-gray-200 p-8 mb-6">
+               <div className="flex items-center justify-between mb-6">
+                 <h4 className="text-2xl font-bold text-slate-900 flex items-center gap-3">
+                   <span className="text-3xl">📄</span> Volledig Rapport
+                 </h4>
+                 <button
+                   onClick={() => {
+                     const printWindow = window.open('', '_blank');
+                     if (printWindow) {
+                       printWindow.document.write(`
+                         <!DOCTYPE html>
+                         <html>
+                           <head>
+                             <title>Organisatie Profiel - ${organisatieProfiel.organisatieNaam || customer.name}</title>
+                             <style>
+                               body { font-family: 'Inter', sans-serif; padding: 40px; line-height: 1.6; color: #1a202c; }
+                               h1 { color: #F36F21; border-bottom: 3px solid #F36F21; padding-bottom: 10px; }
+                               h2 { color: #2d3748; margin-top: 30px; border-bottom: 2px solid #e2e8f0; padding-bottom: 8px; }
+                               h3 { color: #4a5568; margin-top: 20px; }
+                               table { border-collapse: collapse; width: 100%; margin: 20px 0; }
+                               th, td { border: 1px solid #e2e8f0; padding: 12px; text-align: left; }
+                               th { background-color: #f7fafc; font-weight: bold; }
+                               .badge { display: inline-block; padding: 4px 8px; border-radius: 4px; font-size: 12px; font-weight: bold; }
+                             </style>
+                           </head>
+                           <body>
+                             ${organisatieProfiel.volledigRapport.replace(/\n/g, '<br>')}
+                           </body>
+                         </html>
+                       `);
+                       printWindow.document.close();
+                       setTimeout(() => printWindow.print(), 250);
+                     }
+                   }}
+                   className="px-4 py-2 bg-richting-orange text-white rounded-lg text-sm font-medium hover:bg-orange-600 transition-colors flex items-center gap-2"
+                 >
+                   🖨️ Print / Export
+                 </button>
+               </div>
+               <div className="bg-gradient-to-br from-gray-50 to-white rounded-lg p-8 border-2 border-gray-200 shadow-inner">
+                 <div className="prose prose-lg max-w-none prose-headings:text-slate-900 prose-headings:font-bold prose-p:text-gray-700 prose-p:leading-relaxed prose-strong:text-slate-900 prose-ul:text-gray-700 prose-ol:text-gray-700 prose-li:my-2 prose-table:w-full prose-th:bg-gray-100 prose-th:font-bold prose-th:p-3 prose-td:p-3 prose-a:text-richting-orange prose-a:no-underline hover:prose-a:underline">
+                   <div className="text-base text-gray-800 leading-relaxed whitespace-pre-wrap font-sans">
+                     {organisatieProfiel.volledigRapport.split('\n').map((line, idx) => {
+                       // Render headers
+                       if (line.startsWith('# ')) {
+                         return <h1 key={idx} className="text-3xl font-bold text-richting-orange mt-8 mb-4 pb-3 border-b-2 border-richting-orange">{line.substring(2)}</h1>;
+                       }
+                       if (line.startsWith('## ')) {
+                         return <h2 key={idx} className="text-2xl font-bold text-slate-800 mt-6 mb-3 pb-2 border-b border-gray-300">{line.substring(3)}</h2>;
+                       }
+                       if (line.startsWith('### ')) {
+                         return <h3 key={idx} className="text-xl font-bold text-slate-700 mt-4 mb-2">{line.substring(4)}</h3>;
+                       }
+                       // Render tables (basic)
+                       if (line.includes('|') && line.trim().startsWith('|')) {
+                         return <div key={idx} className="my-2 font-mono text-sm bg-gray-100 p-2 rounded border-l-4 border-richting-orange">{line}</div>;
+                       }
+                       // Render lists
+                       if (line.trim().startsWith('- ') || line.trim().startsWith('* ')) {
+                         return <li key={idx} className="ml-4 my-1">{line.substring(line.indexOf('- ') + 2 || line.indexOf('* ') + 2)}</li>;
+                       }
+                       // Render bold text
+                       if (line.includes('**')) {
+                         const parts = line.split('**');
+                         return <p key={idx} className="my-3">{parts.map((part, i) => i % 2 === 1 ? <strong key={i} className="font-bold text-slate-900">{part}</strong> : part)}</p>;
+                       }
+                       // Regular paragraph
+                       if (line.trim()) {
+                         return <p key={idx} className="my-3 leading-relaxed">{line}</p>;
+                       }
+                       return <br key={idx} />;
+                     })}
                    </div>
                  </div>
                </div>
