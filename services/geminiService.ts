@@ -121,3 +121,14 @@ export const askQuestion = async (question: string, contextDocs: DocumentSource[
     return { answer: "Excuses, ik kan de vraag niet verwerken.", citedIds: [] };
   }
 };
+
+// Stub functions for backward compatibility with backup version
+export const analyzeOrganisatieBranche = async (organisatieNaam: string, website: string) => {
+  console.warn("analyzeOrganisatieBranche: Not implemented, using Firebase Function instead");
+  return null;
+};
+
+export const analyzeCultuur = async (organisatieNaam: string, website: string) => {
+  console.warn("analyzeCultuur: Not implemented, using Firebase Function instead");
+  return null;
+};

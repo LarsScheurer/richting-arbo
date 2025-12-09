@@ -35,7 +35,13 @@ export const Layout: React.FC<LayoutProps> = ({ children, user, onLogout, curren
     { id: 'knowledge', label: 'Kennisbank', icon: '📚' },
     { id: 'chat', label: 'Vraag het Gemini', icon: '✨' },
     { id: 'upload', label: 'Nieuwe Bron', icon: '➕' },
+    { id: 'regio', label: 'Regio', icon: '🗺️' },
   ];
+
+  // Add settings menu item for admins
+  const adminNavItems = user.role === UserRole.ADMIN 
+    ? [{ id: 'settings', label: 'Instellingen', icon: '⚙️' }]
+    : [];
 
   const handleRoleSwitch = async (role: UserRole) => {
       await authService.updateUserRole(user.id, role);
@@ -66,6 +72,29 @@ export const Layout: React.FC<LayoutProps> = ({ children, user, onLogout, curren
               {item.label}
             </button>
           ))}
+          
+          {/* Admin-only menu items */}
+          {adminNavItems.length > 0 && (
+            <>
+              <div className="pt-2 mt-2 border-t border-gray-200">
+                <p className="text-[10px] uppercase font-bold text-gray-400 mb-2 px-4">Beheer</p>
+              </div>
+              {adminNavItems.map((item) => (
+                <button
+                  key={item.id}
+                  onClick={() => onNavigate(item.id)}
+                  className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-medium transition-colors ${
+                    currentView === item.id
+                      ? 'bg-orange-50 text-richting-orange border-l-4 border-richting-orange'
+                      : 'text-gray-600 hover:bg-gray-50 hover:text-slate-900'
+                  }`}
+                >
+                  <span className="text-lg">{item.icon}</span>
+                  {item.label}
+                </button>
+              ))}
+            </>
+          )}
         </nav>
 
         <div className="p-4 border-t border-gray-100 bg-slate-50">

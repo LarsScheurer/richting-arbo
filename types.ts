@@ -211,3 +211,52 @@ export interface OrganisatieProfiel {
   createdAt: string;
   updatedAt: string;
 }
+
+// Stapsgewijze Analyse Types
+export interface AnalyseContext {
+  organisatieNaam: string;
+  website: string;
+  hoofdstukken: {
+    [key: string]: HoofdstukData;
+  };
+  metadata: {
+    branche?: string;
+    sbiCodes?: string[];
+    locaties?: any[];
+  };
+}
+
+export interface HoofdstukData {
+  titel: string;
+  content: string;
+  samenvatting: string; // Korte samenvatting voor context
+  keyData?: {
+    risicos?: Risico[];
+    processen?: Proces[];
+    functies?: Functie[];
+    [key: string]: any;
+  };
+  timestamp?: string;
+}
+
+export interface AnalyseProgress {
+  analyseId: string;
+  customerId: string;
+  status: 'running' | 'completed' | 'failed';
+  progress: {
+    totaal: number;
+    voltooid: number;
+    huidigeStap: number;
+  };
+  hoofdstukken: {
+    [key: string]: {
+      status: 'pending' | 'running' | 'completed' | 'failed';
+      content?: string;
+      timestamp?: string;
+      error?: string;
+    };
+  };
+  volledigRapport?: string;
+  createdAt: string;
+  updatedAt: string;
+}

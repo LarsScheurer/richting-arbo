@@ -814,15 +814,35 @@ exports.analyseBranche = (0, https_1.onRequest)({
             const db = getFirestoreDb();
             const promptsRef = db.collection('prompts');
             try {
-                const activePromptQuery = await promptsRef
-                    .where('type', '==', 'branche_analyse')
+                let activePromptQuery = await promptsRef
+                    .where('type', '==', 'publiek_organisatie_profiel')
                     .where('isActief', '==', true)
                     .orderBy('versie', 'desc')
                     .limit(1)
                     .get();
+                if (activePromptQuery.empty) {
+                    // Fallback: check oude type naam voor backwards compatibility
+                    activePromptQuery = await promptsRef
+                        .where('type', '==', 'branche_analyse')
+                        .where('isActief', '==', true)
+                        .orderBy('versie', 'desc')
+                        .limit(1)
+                        .get();
+                }
                 if (!activePromptQuery.empty) {
-                    promptTekst = activePromptQuery.docs[0].data().promptTekst;
-                    console.log(`Using active prompt version ${activePromptQuery.docs[0].data().versie}`);
+                    const activeDoc = activePromptQuery.docs[0];
+                    const data = activeDoc.data();
+                    if (data.type === 'branche_analyse') {
+                        try {
+                            await activeDoc.ref.update({ type: 'publiek_organisatie_profiel' });
+                            console.log('🔄 Migrated prompt type to publiek_organisatie_profiel (backend)');
+                        }
+                        catch (migrateErr) {
+                            console.log('⚠️ Could not migrate prompt type on backend:', migrateErr.message);
+                        }
+                    }
+                    promptTekst = data.promptTekst;
+                    console.log(`Using active prompt version ${data.versie}`);
                 }
                 else {
                     console.log('No active prompt found, using default');
@@ -831,10 +851,16 @@ exports.analyseBranche = (0, https_1.onRequest)({
             catch (orderByError) {
                 // If orderBy fails, try without orderBy and sort in memory
                 console.log('⚠️ orderBy failed, trying without orderBy:', orderByError.message);
-                const allActivePrompts = await promptsRef
-                    .where('type', '==', 'branche_analyse')
+                let allActivePrompts = await promptsRef
+                    .where('type', '==', 'publiek_organisatie_profiel')
                     .where('isActief', '==', true)
                     .get();
+                if (allActivePrompts.empty) {
+                    allActivePrompts = await promptsRef
+                        .where('type', '==', 'branche_analyse')
+                        .where('isActief', '==', true)
+                        .get();
+                }
                 if (!allActivePrompts.empty) {
                     const sorted = allActivePrompts.docs.sort((a, b) => {
                         const versieA = a.data().versie || 0;
@@ -881,12 +907,22 @@ Voer nu de analyse uit en geef het resultaat in het gevraagde JSON formaat.`;
         for (let i = 0; i < jsonStr.length; i++) {
             const char = jsonStr[i];
             const charCode = jsonStr.charCodeAt(i);
+            const nextChar = i + 1 < jsonStr.length ? jsonStr[i + 1] : null;
+            
             if (escapeNext) {
                 // We're processing an escaped character
                 // Check if it's a valid escape sequence
                 const validEscapes = ['n', 'r', 't', 'b', 'f', '\\', '"', '/', 'u'];
                 if (validEscapes.includes(char)) {
                     repaired += '\\' + char;
+                    // Special handling for unicode sequences
+                    if (char === 'u' && i + 4 < jsonStr.length) {
+                        const unicodeSeq = jsonStr.substring(i + 1, i + 5);
+                        if (/^[0-9A-Fa-f]{4}$/.test(unicodeSeq)) {
+                            repaired += unicodeSeq;
+                            i += 4; // Skip the next 4 characters
+                        }
+                    }
                 }
                 else if (char === 'u' && i + 4 < jsonStr.length) {
                     // Unicode escape sequence \uXXXX
@@ -907,16 +943,27 @@ Voer nu de analyse uit en geef het resultaat in het gevraagde JSON formaat.`;
                 escapeNext = false;
                 continue;
             }
+            
+            // Check for double backslash (already escaped) - don't treat as escape start
+            if (char === '\\' && nextChar === '\\' && inString) {
+                // Double backslash in string - keep as is (already properly escaped)
+                repaired += '\\\\';
+                i++; // Skip next backslash
+                continue;
+            }
+            
             if (char === '\\') {
                 // Start of escape sequence
                 escapeNext = true;
                 continue;
             }
-            if (char === '"') {
+            
+            if (char === '"' && !escapeNext) {
                 inString = !inString;
                 repaired += char;
                 continue;
             }
+            
             if (inString) {
                 // Inside a string: escape control characters and special characters
                 if (char === '\n') {
@@ -1106,27 +1153,64 @@ Voer nu de analyse uit en geef het resultaat in het gevraagde JSON formaat.`;
             jsonStr = jsonMatch[0];
         }
         // Improved JSON repair: handle unescaped newlines in string values more robustly
-        // EXACT SAME LOGIC AS analyseBranche (which works!)
+        // Use the same improved logic as analyseBranche
         let repaired = '';
         let inString = false;
         let escapeNext = false;
         for (let i = 0; i < jsonStr.length; i++) {
             const char = jsonStr[i];
+            const charCode = jsonStr.charCodeAt(i);
+            const nextChar = i + 1 < jsonStr.length ? jsonStr[i + 1] : null;
+            
             if (escapeNext) {
-                repaired += char;
+                // We're processing an escaped character
+                const validEscapes = ['n', 'r', 't', 'b', 'f', '\\', '"', '/', 'u'];
+                if (validEscapes.includes(char)) {
+                    repaired += '\\' + char;
+                    // Special handling for unicode sequences
+                    if (char === 'u' && i + 4 < jsonStr.length) {
+                        const unicodeSeq = jsonStr.substring(i + 1, i + 5);
+                        if (/^[0-9A-Fa-f]{4}$/.test(unicodeSeq)) {
+                            repaired += unicodeSeq;
+                            i += 4; // Skip the next 4 characters
+                        }
+                    }
+                }
+                else if (char === 'u' && i + 4 < jsonStr.length) {
+                    const unicodeSeq = jsonStr.substring(i, i + 5);
+                    if (/^u[0-9A-Fa-f]{4}$/.test(unicodeSeq)) {
+                        repaired += '\\' + unicodeSeq;
+                        i += 4;
+                    }
+                    else {
+                        repaired += '\\\\u';
+                    }
+                }
+                else {
+                    repaired += '\\\\' + char;
+                }
                 escapeNext = false;
                 continue;
             }
+            
+            // Check for double backslash (already escaped) - don't treat as escape start
+            if (char === '\\' && nextChar === '\\' && inString) {
+                repaired += '\\\\';
+                i++; // Skip next backslash
+                continue;
+            }
+            
             if (char === '\\') {
-                repaired += char;
                 escapeNext = true;
                 continue;
             }
+            
             if (char === '"' && !escapeNext) {
                 inString = !inString;
                 repaired += char;
                 continue;
             }
+            
             if (inString) {
                 // Inside a string: escape control characters
                 if (char === '\n') {
@@ -1144,8 +1228,16 @@ Voer nu de analyse uit en geef het resultaat in het gevraagde JSON formaat.`;
                 else if (char === '\f') {
                     repaired += '\\f';
                 }
-                else if (/[\x00-\x1F\x7F]/.test(char)) {
-                    // Remove other control characters
+                else if (char === '\\') {
+                    repaired += '\\\\';
+                }
+                else if (char === '"') {
+                    repaired += '\\"';
+                }
+                else if (charCode >= 0x00 && charCode <= 0x1F) {
+                    continue;
+                }
+                else if (charCode === 0x7F) {
                     continue;
                 }
                 else {
@@ -1153,9 +1245,11 @@ Voer nu de analyse uit en geef het resultaat in het gevraagde JSON formaat.`;
                 }
             }
             else {
-                // Outside a string: keep as is
                 repaired += char;
             }
+        }
+        if (escapeNext) {
+            repaired += '\\\\';
         }
         jsonStr = repaired;
         let json;
@@ -2021,6 +2115,644 @@ exports.getCustomerFolders = (0, https_1.onRequest)({
             details: error.message,
             folders: []
         });
+    }
+});
+// Helper function to extract key data from hoofdstuk content
+function extractKeyDataFromHoofdstuk(hoofdstukNummer, content, jsonData) {
+    const keyData = {};
+    if (hoofdstukNummer === '4' && jsonData && jsonData.risicos) {
+        keyData.risicos = jsonData.risicos;
+    }
+    if (hoofdstukNummer === '5' && jsonData && jsonData.processen) {
+        keyData.processen = jsonData.processen;
+    }
+    if (hoofdstukNummer === '6' && jsonData && jsonData.functies) {
+        keyData.functies = jsonData.functies;
+    }
+    if (hoofdstukNummer === '2' && jsonData) {
+        if (jsonData.sbiCodes) keyData.sbiCodes = jsonData.sbiCodes;
+        if (jsonData.locaties) keyData.locaties = jsonData.locaties;
+        if (jsonData.personeleOmvang) keyData.personeleOmvang = jsonData.personeleOmvang;
+    }
+    return keyData;
+}
+// Helper function to create context summary for prompts
+function createContextSummary(context) {
+    let summary = `ORGANISATIE: ${context.organisatieNaam}\nWEBSITE: ${context.website}\n\n`;
+    if (context.metadata.branche) {
+        summary += `BRANCHE: ${context.metadata.branche}\n`;
+    }
+    summary += '\nCONTEXT VAN VOORGAANDE HOOFDSTUKKEN:\n';
+    Object.keys(context.hoofdstukken).sort().forEach((key) => {
+        const h = context.hoofdstukken[key];
+        summary += `\n## Hoofdstuk ${key}: ${h.titel}\n`;
+        summary += `${h.samenvatting}\n`;
+        // Add key data for important hoofdstukken
+        if (h.keyData) {
+            if (h.keyData.risicos && h.keyData.risicos.length > 0) {
+                summary += `\nGeïdentificeerde risico's:\n`;
+                h.keyData.risicos.forEach((r, idx) => {
+                    summary += `${idx + 1}. ${r.naam} (${r.categorie})\n`;
+                });
+            }
+            if (h.keyData.processen && h.keyData.processen.length > 0) {
+                summary += `\nGeïdentificeerde processen:\n`;
+                h.keyData.processen.forEach((p, idx) => {
+                    summary += `${idx + 1}. ${p.naam}\n`;
+                });
+            }
+            if (h.keyData.functies && h.keyData.functies.length > 0) {
+                summary += `\nGeïdentificeerde functies:\n`;
+                h.keyData.functies.forEach((f, idx) => {
+                    summary += `${idx + 1}. ${f.naam}\n`;
+                });
+            }
+        }
+    });
+    return summary;
+}
+// Helper function to generate hoofdstuk prompt
+function generateHoofdstukPrompt(hoofdstukNummer, titel, beschrijving, context) {
+    const contextSummary = createContextSummary(context);
+    // Use base prompt from Firestore if available, otherwise use default
+    const basePromptText = context.basePrompt || DEFAULT_BRANCHE_ANALYSE_PROMPT;
+    // Extract relevant section from base prompt for this hoofdstuk
+    // For now, we'll use the base prompt as context and add hoofdstuk-specific instructions
+    return `
+${basePromptText}
+
+BELANGRIJK: Je werkt nu aan een STAPSGEWIJZE analyse. Dit betekent dat je alleen Hoofdstuk ${hoofdstukNummer} genereert, niet het volledige rapport.
+
+CONTEXT VAN VOORGAANDE HOOFDSTUKKEN:
+${contextSummary}
+
+HUIDIGE TAAK:
+Genereer ALLEEN Hoofdstuk ${hoofdstukNummer}: ${titel}
+
+${beschrijving}
+
+BELANGRIJK VOOR STAPSGEWIJZE ANALYSE:
+- Je genereert ALLEEN dit hoofdstuk, niet het volledige rapport
+- Gebruik de context van voorgaande hoofdstukken (zie hierboven)
+- Verwijs consistent naar eerder genoemde informatie
+- Zorg dat stijl en toon consistent blijven (persoonlijk, professioneel, proactief, 'u'-vorm)
+- Als je verwijst naar risico's, gebruik EXACT dezelfde namen als in hoofdstuk 4
+- Als je verwijst naar processen, gebruik EXACT dezelfde namen als in hoofdstuk 5
+- Als je verwijst naar functies, gebruik EXACT dezelfde namen als in hoofdstuk 6
+- Schrijf vanuit de identiteit en expertise van Richting
+- Richt je tot de directie van ${context.organisatieNaam}
+
+Geef het antwoord ALLEEN in puur, geldig JSON formaat:
+{
+  "hoofdstuk${hoofdstukNummer}": "Markdown content van het hoofdstuk",
+  "samenvatting": "Korte samenvatting (max 100 woorden) voor context in volgende hoofdstukken"
+  ${hoofdstukNummer === '4' ? ',\n  "risicos": [{"id": "...", "naam": "...", "categorie": "...", "kans": 1-5, "effect": 1-5, "blootstelling": 1-10, "risicogetal": 0, "prioriteit": 1-5}]' : ''}
+  ${hoofdstukNummer === '5' ? ',\n  "processen": [{"id": "...", "naam": "...", "beschrijving": "..."}]' : ''}
+  ${hoofdstukNummer === '6' ? ',\n  "functies": [{"id": "...", "naam": "...", "beschrijving": "...", "taken": ["..."]}]' : ''}
+  ${hoofdstukNummer === '2' ? ',\n  "sbiCodes": [{"code": "...", "omschrijving": "..."}],\n  "locaties": [{"naam": "...", "adres": "...", "stad": "...", "aantalMedewerkers": 0}],\n  "personeleOmvang": [{"regio": "...", "aantal": 0}]' : ''}
+}
+`;
+}
+// Stapsgewijze Analyse Orchestrator
+exports.analyseBrancheStapsgewijs = (0, https_1.onRequest)({
+    cors: true,
+    timeoutSeconds: 540,
+    memory: "512MiB"
+}, async (req, res) => {
+    var _a;
+    res.set('Access-Control-Allow-Origin', '*');
+    res.set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.set('Access-Control-Allow-Headers', 'Content-Type');
+    if (req.method === 'OPTIONS') {
+        res.status(204).send('');
+        return;
+    }
+    if (!genAI) {
+        res.status(500).json({ error: "Server misconfiguration: API Key missing." });
+        return;
+    }
+    const { organisatieNaam, website, customerId } = req.body;
+    if (!organisatieNaam || !website) {
+        res.status(400).json({ error: "organisatieNaam en website zijn verplicht" });
+        return;
+    }
+    const analyseId = `analyse_${Date.now()}`;
+    const db = getFirestoreDb();
+    const progressRef = db.collection('analyseProgress').doc(analyseId);
+    // Initialize progress
+    const initialProgress = {
+        analyseId,
+        customerId: customerId || '',
+        status: 'running',
+        progress: {
+            totaal: 13,
+            voltooid: 0,
+            huidigeStap: 0
+        },
+        hoofdstukken: {},
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp()
+    };
+    await progressRef.set(initialProgress);
+    // Start async processing (don't wait for completion)
+    processAnalyseStapsgewijs(organisatieNaam, website, analyseId, customerId).catch((error) => {
+        console.error('Analyse error:', error);
+        progressRef.update({
+            status: 'failed',
+            error: error.message,
+            updatedAt: admin.firestore.FieldValue.serverTimestamp()
+        });
+    });
+    // Return immediately with analyseId
+    res.json({
+        analyseId,
+        message: 'Analyse gestart. Gebruik analyseId om progress op te halen.',
+        progressUrl: `/analyseProgress/${analyseId}`
+    });
+});
+// Async function to process the analysis
+async function processAnalyseStapsgewijs(organisatieNaam, website, analyseId, customerId) {
+    const db = getFirestoreDb();
+    const progressRef = db.collection('analyseProgress').doc(analyseId);
+    const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+    // Get active prompt from Firestore
+    let basePrompt = DEFAULT_BRANCHE_ANALYSE_PROMPT;
+    try {
+        const promptsRef = db.collection('prompts');
+        try {
+            let activePromptQuery = await promptsRef
+                .where('type', '==', 'publiek_organisatie_profiel')
+                .where('isActief', '==', true)
+                .orderBy('versie', 'desc')
+                .limit(1)
+                .get();
+            if (activePromptQuery.empty) {
+                activePromptQuery = await promptsRef
+                    .where('type', '==', 'branche_analyse')
+                    .where('isActief', '==', true)
+                    .orderBy('versie', 'desc')
+                    .limit(1)
+                    .get();
+            }
+            if (!activePromptQuery.empty) {
+                const activeDoc = activePromptQuery.docs[0];
+                const data = activeDoc.data();
+                if (data.type === 'branche_analyse') {
+                    try {
+                        await activeDoc.ref.update({ type: 'publiek_organisatie_profiel' });
+                        console.log('🔄 Migrated prompt type to publiek_organisatie_profiel (backend stapsgewijs)');
+                    }
+                    catch (migrateErr) {
+                        console.log('⚠️ Could not migrate prompt type on backend (stapsgewijs):', migrateErr.message);
+                    }
+                }
+                basePrompt = data.promptTekst;
+                console.log(`✅ Using active prompt version ${data.versie} for stapsgewijze analyse`);
+            }
+            else {
+                console.log('⚠️ No active prompt found for stapsgewijze analyse, using default');
+            }
+        }
+        catch (orderByError) {
+            console.log('⚠️ orderBy failed for stapsgewijze analyse, trying without orderBy:', orderByError.message);
+            let allActivePrompts = await promptsRef
+                .where('type', '==', 'publiek_organisatie_profiel')
+                .where('isActief', '==', true)
+                .get();
+            if (allActivePrompts.empty) {
+                allActivePrompts = await promptsRef
+                    .where('type', '==', 'branche_analyse')
+                    .where('isActief', '==', true)
+                    .get();
+            }
+            if (!allActivePrompts.empty) {
+                const sorted = allActivePrompts.docs.sort((a, b) => {
+                    const versieA = a.data().versie || 0;
+                    const versieB = b.data().versie || 0;
+                    return versieB - versieA;
+                });
+                basePrompt = sorted[0].data().promptTekst;
+                console.log(`✅ Using active prompt version ${sorted[0].data().versie} for stapsgewijze analyse (sorted in memory)`);
+            }
+            else {
+                console.log('⚠️ No active prompt found for stapsgewijze analyse, using default');
+            }
+        }
+    }
+    catch (promptError) {
+        console.error("Error fetching prompt for stapsgewijze analyse:", promptError);
+        console.log("Using default prompt");
+    }
+    // Initialize context
+    const context = {
+        organisatieNaam,
+        website,
+        hoofdstukken: {},
+        metadata: {},
+        basePrompt: basePrompt
+    };
+    // Hoofdstuk definities
+    const hoofdstukken = [
+        {
+            nummer: '1',
+            titel: 'Introductie en Branche-identificatie',
+            beschrijving: `- Geef een algemene beschrijving van de sector en de belangrijkste activiteiten.
+- Analyseer de actualiteiten in de branche op het gebied van mens en werk (arbeidsmarkt, trends, vacatures).
+- Identificeer de belangrijkste CAO-thema's die relevant zijn voor verzuim en arbeidsomstandigheden. Benoem de betrokken werkgevers- en werknemersorganisaties.`
+        },
+        {
+            nummer: '2',
+            titel: 'SBI-codes en Bedrijfsinformatie',
+            beschrijving: `- Toon in een tabel de relevante SBI-codes met omschrijving.
+- Analyseer de personele omvang en vestigingslocaties van de organisatie in Nederland.
+- Identificeer alle vestigingslocaties met volledige adresgegevens.
+- Presenteer in een tabel de personele aantallen per regio.`
+        },
+        {
+            nummer: '3',
+            titel: 'Arbocatalogus en Branche-RI&E',
+            beschrijving: `- Geef een overzicht van de door de branche erkende arbo-instrumenten (Arbocatalogus, Branche-RI&E), inclusief hun status en directe hyperlinks.`
+        },
+        {
+            nummer: '4',
+            titel: 'Risicocategorieën en Kwantificering',
+            beschrijving: `- Presenteer een tabel met de belangrijkste risico's, onderverdeeld in 'Psychische risico's', 'Fysieke risico's', en 'Overige'.
+- Gebruik de Fine & Kinney methodiek: Risicogetal (R) = Blootstelling (B) × Kans (W) × Effect (E)
+- Blootstelling (B): 1-10 (aantal personen blootgesteld)
+- Kans (W): 0.5, 1, 3, 6, of 10 (Fine & Kinney waarden)
+- Effect (E): 1, 3, 7, 15, of 40 (Fine & Kinney waarden)
+- Risicogetal (R) = B × W × E
+- Prioriteit: R >= 400 = 1 (Zeer hoog), R >= 200 = 2 (Hoog), R >= 100 = 3 (Middel), R >= 50 = 4 (Laag), R < 50 = 5 (Zeer laag)
+- Toon onderaan de tabel de totaaltelling van alle risicogetallen.`
+        },
+        {
+            nummer: '5',
+            titel: 'Primaire Processen in de Branche',
+            beschrijving: `- Beschrijf stapsgewijs de kernprocessen op de werkvloer die typerend zijn voor deze branche.`
+        },
+        {
+            nummer: '6',
+            titel: 'Werkzaamheden en Functies',
+            beschrijving: `- Geef een overzicht van de meest voorkomende functies, inclusief een omschrijving en voorbeelden van taken.`
+        }
+    ];
+    // Process eerste 6 hoofdstukken sequentieel (met context)
+    for (const hoofdstuk of hoofdstukken) {
+        try {
+            // Update progress
+            await progressRef.update({
+                [`hoofdstukken.${hoofdstuk.nummer}`]: {
+                    status: 'running',
+                    timestamp: admin.firestore.FieldValue.serverTimestamp()
+                },
+                'progress.huidigeStap': parseInt(hoofdstuk.nummer),
+                updatedAt: admin.firestore.FieldValue.serverTimestamp()
+            });
+            // Generate prompt with context
+            const prompt = generateHoofdstukPrompt(hoofdstuk.nummer, hoofdstuk.titel, hoofdstuk.beschrijving, context);
+            // Call Gemini
+            const result = await model.generateContent(prompt);
+            const response = await result.response;
+            let jsonStr = response.text();
+            // Clean and parse JSON
+            jsonStr = jsonStr.replace(/```json/g, '').replace(/```/g, '').trim();
+            const jsonMatch = jsonStr.match(/\{[\s\S]*\}/);
+            if (jsonMatch) {
+                jsonStr = jsonMatch[0];
+            }
+            // Parse JSON (with error handling)
+            let jsonData;
+            try {
+                jsonData = JSON.parse(jsonStr);
+            }
+            catch (parseError) {
+                console.error(`JSON Parse Error for hoofdstuk ${hoofdstuk.nummer}:`, parseError.message);
+                // Try to repair JSON (simplified version)
+                jsonStr = jsonStr.replace(/\\n/g, ' ').replace(/\\"/g, '"');
+                jsonData = JSON.parse(jsonStr);
+            }
+            // Extract data
+            const content = jsonData[`hoofdstuk${hoofdstuk.nummer}`] || jsonData.content || '';
+            const samenvatting = jsonData.samenvatting || content.substring(0, 200);
+            const keyData = extractKeyDataFromHoofdstuk(hoofdstuk.nummer, content, jsonData);
+            // Update context
+            context.hoofdstukken[hoofdstuk.nummer] = {
+                titel: hoofdstuk.titel,
+                content,
+                samenvatting,
+                keyData
+            };
+            // Update metadata if needed
+            if (hoofdstuk.nummer === '1' && jsonData.branche) {
+                context.metadata.branche = jsonData.branche;
+            }
+            // Save to progress
+            await progressRef.update({
+                [`hoofdstukken.${hoofdstuk.nummer}`]: {
+                    status: 'completed',
+                    content,
+                    timestamp: admin.firestore.FieldValue.serverTimestamp()
+                },
+                'progress.voltooid': admin.firestore.FieldValue.increment(1),
+                updatedAt: admin.firestore.FieldValue.serverTimestamp()
+            });
+            console.log(`✅ Hoofdstuk ${hoofdstuk.nummer} voltooid`);
+        }
+        catch (error) {
+            console.error(`❌ Error in hoofdstuk ${hoofdstuk.nummer}:`, error);
+            await progressRef.update({
+                [`hoofdstukken.${hoofdstuk.nummer}`]: {
+                    status: 'failed',
+                    error: error.message,
+                    timestamp: admin.firestore.FieldValue.serverTimestamp()
+                },
+                updatedAt: admin.firestore.FieldValue.serverTimestamp()
+            });
+        }
+    }
+    // Hoofdstukken 7-9 (parallel mogelijk, maar nu sequentieel voor eenvoud)
+    const hoofdstukkenFase2 = [
+        {
+            nummer: '7',
+            titel: 'Verzuim in de Branche',
+            beschrijving: `- Analyseer het verzuim in de branche, benoem de belangrijkste oorzaken en vergelijk dit met het landelijk gemiddelde.
+- Presenteer een matrix van verzuimrisico's per functie. Gebruik de functies in de rijen en de risico's in de kolommen.
+- Verwijs naar de functies uit hoofdstuk 6 en risico's uit hoofdstuk 4.`
+        },
+        {
+            nummer: '8',
+            titel: 'Beroepsziekten in de Branche',
+            beschrijving: `- Analyseer de meest voorkomende beroepsziekten en koppel deze direct aan de geïdentificeerde risico's uit hoofdstuk 4.
+- Gebruik EXACT dezelfde risico namen als in hoofdstuk 4.`
+        },
+        {
+            nummer: '9',
+            titel: 'Gevaarlijke Stoffen en Risico\'s',
+            beschrijving: `- Indien van toepassing, beschrijf de gevaarlijke stoffen die in de sector worden gebruikt.
+- Presenteer een matrix die de risico's bij de hantering van deze stoffen weergeeft.`
+        }
+    ];
+    for (const hoofdstuk of hoofdstukkenFase2) {
+        try {
+            await progressRef.update({
+                [`hoofdstukken.${hoofdstuk.nummer}`]: {
+                    status: 'running',
+                    timestamp: admin.firestore.FieldValue.serverTimestamp()
+                },
+                'progress.huidigeStap': parseInt(hoofdstuk.nummer),
+                updatedAt: admin.firestore.FieldValue.serverTimestamp()
+            });
+            const prompt = generateHoofdstukPrompt(hoofdstuk.nummer, hoofdstuk.titel, hoofdstuk.beschrijving, context);
+            const result = await model.generateContent(prompt);
+            const response = await result.response;
+            let jsonStr = response.text();
+            jsonStr = jsonStr.replace(/```json/g, '').replace(/```/g, '').trim();
+            const jsonMatch = jsonStr.match(/\{[\s\S]*\}/);
+            if (jsonMatch) {
+                jsonStr = jsonMatch[0];
+            }
+            let jsonData;
+            try {
+                jsonData = JSON.parse(jsonStr);
+            }
+            catch (parseError) {
+                jsonStr = jsonStr.replace(/\\n/g, ' ').replace(/\\"/g, '"');
+                jsonData = JSON.parse(jsonStr);
+            }
+            const content = jsonData[`hoofdstuk${hoofdstuk.nummer}`] || jsonData.content || '';
+            const samenvatting = jsonData.samenvatting || content.substring(0, 200);
+            context.hoofdstukken[hoofdstuk.nummer] = {
+                titel: hoofdstuk.titel,
+                content,
+                samenvatting,
+                keyData: {}
+            };
+            await progressRef.update({
+                [`hoofdstukken.${hoofdstuk.nummer}`]: {
+                    status: 'completed',
+                    content,
+                    timestamp: admin.firestore.FieldValue.serverTimestamp()
+                },
+                'progress.voltooid': admin.firestore.FieldValue.increment(1),
+                updatedAt: admin.firestore.FieldValue.serverTimestamp()
+            });
+            console.log(`✅ Hoofdstuk ${hoofdstuk.nummer} voltooid`);
+        }
+        catch (error) {
+            console.error(`❌ Error in hoofdstuk ${hoofdstuk.nummer}:`, error);
+            await progressRef.update({
+                [`hoofdstukken.${hoofdstuk.nummer}`]: {
+                    status: 'failed',
+                    error: error.message,
+                    timestamp: admin.firestore.FieldValue.serverTimestamp()
+                },
+                updatedAt: admin.firestore.FieldValue.serverTimestamp()
+            });
+        }
+    }
+    // Hoofdstukken 10-12 (vereisen alle voorgaande hoofdstukken)
+    const hoofdstukkenFase3 = [
+        {
+            nummer: '10',
+            titel: 'Risicomatrices',
+            beschrijving: `- Matrix 1: Risico's per Primair Proces. Gebruik EXACT de processen uit hoofdstuk 5 en risico's uit hoofdstuk 4.
+- Matrix 2: Risico's per Functie. Gebruik EXACT de functies uit hoofdstuk 6 en risico's uit hoofdstuk 4.
+- Gebruik visuele symbolen (● voor 'hoog', ◐ voor 'gemiddeld', ○ voor 'laag').`
+        },
+        {
+            nummer: '11',
+            titel: 'Vooruitblik en Speerpunten',
+            beschrijving: `- Analyseer het verwachte effect van CAO-thema's op o.a. verzuim, verloop en aantrekkingskracht op de arbeidsmarkt.
+- Formuleer concrete speerpunten voor de ondernemer om verzuim positief te beïnvloeden en te prioriteren.
+- Benoem de gezamenlijke thema's die de ondernemer samen met Richting kan oppakken. Koppel elk speerpunt direct aan een specifieke dienst van Richting met een hyperlink.`
+        },
+        {
+            nummer: '12',
+            titel: 'Stappenplan voor een Preventieve Samenwerking',
+            beschrijving: `- Integreer de visuele weergave van het "Stappenplan Samenwerken aan preventie".
+- Presenteer een concreet en op maat gemaakt stappenplan voor de organisatie, gebaseerd op de analyse. Begin altijd met Implementatie en Verzuimbegeleiding.
+- Doe voorstellen voor specifieke diensten van Richting (RI&E, PMO, Werkplekonderzoek, Het Richtinggevende Gesprek, etc.) met directe hyperlinks naar de relevante webpagina's.`
+        },
+        {
+            nummer: '13',
+            titel: 'Bronvermeldingen',
+            beschrijving: `- Geef een volledige lijst van geraadpleegde bronnen, opgemaakt in APA-stijl, met directe en werkende hyperlinks.
+- Geen Google search links, alleen directe URL's.`
+        }
+    ];
+    for (const hoofdstuk of hoofdstukkenFase3) {
+        try {
+            await progressRef.update({
+                [`hoofdstukken.${hoofdstuk.nummer}`]: {
+                    status: 'running',
+                    timestamp: admin.firestore.FieldValue.serverTimestamp()
+                },
+                'progress.huidigeStap': parseInt(hoofdstuk.nummer),
+                updatedAt: admin.firestore.FieldValue.serverTimestamp()
+            });
+            const prompt = generateHoofdstukPrompt(hoofdstuk.nummer, hoofdstuk.titel, hoofdstuk.beschrijving, context);
+            const result = await model.generateContent(prompt);
+            const response = await result.response;
+            let jsonStr = response.text();
+            jsonStr = jsonStr.replace(/```json/g, '').replace(/```/g, '').trim();
+            const jsonMatch = jsonStr.match(/\{[\s\S]*\}/);
+            if (jsonMatch) {
+                jsonStr = jsonMatch[0];
+            }
+            let jsonData;
+            try {
+                jsonData = JSON.parse(jsonStr);
+            }
+            catch (parseError) {
+                jsonStr = jsonStr.replace(/\\n/g, ' ').replace(/\\"/g, '"');
+                jsonData = JSON.parse(jsonStr);
+            }
+            const content = jsonData[`hoofdstuk${hoofdstuk.nummer}`] || jsonData.content || '';
+            const samenvatting = jsonData.samenvatting || content.substring(0, 200);
+            context.hoofdstukken[hoofdstuk.nummer] = {
+                titel: hoofdstuk.titel,
+                content,
+                samenvatting,
+                keyData: {}
+            };
+            await progressRef.update({
+                [`hoofdstukken.${hoofdstuk.nummer}`]: {
+                    status: 'completed',
+                    content,
+                    timestamp: admin.firestore.FieldValue.serverTimestamp()
+                },
+                'progress.voltooid': admin.firestore.FieldValue.increment(1),
+                updatedAt: admin.firestore.FieldValue.serverTimestamp()
+            });
+            console.log(`✅ Hoofdstuk ${hoofdstuk.nummer} voltooid`);
+        }
+        catch (error) {
+            console.error(`❌ Error in hoofdstuk ${hoofdstuk.nummer}:`, error);
+            await progressRef.update({
+                [`hoofdstukken.${hoofdstuk.nummer}`]: {
+                    status: 'failed',
+                    error: error.message,
+                    timestamp: admin.firestore.FieldValue.serverTimestamp()
+                },
+                updatedAt: admin.firestore.FieldValue.serverTimestamp()
+            });
+        }
+    }
+    // Synthesis stap: Combineer alle hoofdstukken tot één coherent rapport
+    try {
+        await progressRef.update({
+            'progress.huidigeStap': 14,
+            updatedAt: admin.firestore.FieldValue.serverTimestamp()
+        });
+        const synthesisPrompt = `
+Je hebt een organisatieanalyse uitgevoerd in 13 hoofdstukken voor ${organisatieNaam}.
+
+ALLE HOOFDSTUKKEN:
+${Object.keys(context.hoofdstukken).sort().map((key) => {
+            const h = context.hoofdstukken[key];
+            return `\n## Hoofdstuk ${key}: ${h.titel}\n${h.content}`;
+        }).join('\n\n')}
+
+TAAK:
+1. Combineer alle hoofdstukken tot één coherent, volledig markdown rapport
+2. Zorg voor consistentie in:
+   - Risico namen (gebruik EXACT dezelfde namen overal)
+   - Proces namen (gebruik EXACT dezelfde namen overal)
+   - Functie namen (gebruik EXACT dezelfde namen overal)
+   - Stijl en toon (persoonlijk, professioneel, proactief, 'u'-vorm)
+3. Valideer cross-references tussen hoofdstukken
+4. Zorg dat matrices (hoofdstuk 10) correct verwijzen naar risicos, processen en functies
+5. Voeg een inleiding toe aan het begin: "Geachte directie van ${organisatieNaam}, ..."
+6. Voeg een afsluiting toe met datum en copyright: "© ${new Date().getFullYear()} Richting. Alle rechten voorbehouden."
+
+Geef het volledige rapport terug in markdown formaat. Geef ALLEEN het rapport, geen extra tekst.
+`;
+        const result = await model.generateContent(synthesisPrompt);
+        const response = await result.response;
+        const volledigRapport = response.text();
+        // Extract structured data from context
+        const risicos = context.hoofdstukken['4']?.keyData?.risicos || [];
+        const processen = context.hoofdstukken['5']?.keyData?.processen || [];
+        const functies = context.hoofdstukken['6']?.keyData?.functies || [];
+        const sbiCodes = context.hoofdstukken['2']?.keyData?.sbiCodes || [];
+        const locaties = context.hoofdstukken['2']?.keyData?.locaties || [];
+        // Calculate scores
+        const totaalScore = risicos.reduce((sum, r) => sum + (r.risicogetal || 0), 0);
+        const gemiddeldeRisicoScore = risicos.length > 0 ? totaalScore / risicos.length : 0;
+        // Save final result
+        await progressRef.update({
+            volledigRapport,
+            status: 'completed',
+            'progress.voltooid': 13,
+            'progress.huidigeStap': 13,
+            updatedAt: admin.firestore.FieldValue.serverTimestamp()
+        });
+        // Also save as OrganisatieProfiel if customerId provided
+        if (customerId) {
+            try {
+                const profielRef = db.collection('organisatieProfielen');
+                const profielData = {
+                    customerId,
+                    analyseDatum: new Date().toISOString(),
+                    organisatieNaam,
+                    website,
+                    volledigRapport,
+                    risicos,
+                    processen,
+                    functies,
+                    totaalScore,
+                    gemiddeldeRisicoScore,
+                    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+                    updatedAt: admin.firestore.FieldValue.serverTimestamp()
+                };
+                await profielRef.add(profielData);
+                console.log('✅ OrganisatieProfiel opgeslagen');
+            }
+            catch (error) {
+                console.error('Error saving OrganisatieProfiel:', error);
+            }
+        }
+        console.log('✅ Synthesis voltooid - Analyse compleet');
+    }
+    catch (error) {
+        console.error('❌ Error in synthesis:', error);
+        await progressRef.update({
+            status: 'failed',
+            error: error.message,
+            updatedAt: admin.firestore.FieldValue.serverTimestamp()
+        });
+    }
+}
+// Endpoint to get analyse progress
+exports.getAnalyseProgress = (0, https_1.onRequest)({
+    cors: true
+}, async (req, res) => {
+    res.set('Access-Control-Allow-Origin', '*');
+    res.set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.set('Access-Control-Allow-Headers', 'Content-Type');
+    if (req.method === 'OPTIONS') {
+        res.status(204).send('');
+        return;
+    }
+    const analyseId = req.query.analyseId || req.body.analyseId;
+    if (!analyseId) {
+        res.status(400).json({ error: "analyseId is verplicht" });
+        return;
+    }
+    try {
+        const db = getFirestoreDb();
+        const progressRef = db.collection('analyseProgress').doc(analyseId);
+        const progressDoc = await progressRef.get();
+        if (!progressDoc.exists) {
+            res.status(404).json({ error: "Analyse niet gevonden" });
+            return;
+        }
+        const progress = progressDoc.data();
+        res.json(progress);
+    }
+    catch (error) {
+        console.error('Error getting progress:', error);
+        res.status(500).json({ error: error.message });
     }
 });
 //# sourceMappingURL=index.js.map

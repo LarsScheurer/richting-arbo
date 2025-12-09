@@ -1,8 +1,10 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { User, DocumentSource, KNOWLEDGE_STRUCTURE, DocType, GeminiAnalysisResult, ChatMessage, Customer, Location, UserRole, ContactPerson, OrganisatieProfiel, Risico, Proces, Functie } from './types';
-import { authService, dbService, customerService } from './services/firebase';
+import { authService, dbService, customerService, promptService, richtingLocatiesService, Prompt, RichtingLocatie } from './services/firebase';
+import { doc, updateDoc } from 'firebase/firestore';
+import { db } from './services/firebase';
 import { Layout, RichtingLogo } from './components/Layout';
-import { analyzeContent, askQuestion } from './services/geminiService';
+import { analyzeContent, askQuestion, analyzeOrganisatieBranche, analyzeCultuur } from './services/geminiService';
 
 // --- ICONS ---
 const EyeIcon = () => <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></svg>;
@@ -67,9 +69,9 @@ const convertEffectToFineKinney = (oldValue: number): number => {
 
 const getStatusLabel = (status: string) => {
   switch (status) {
-    case 'active': return 'Actief';
+    case 'active': return 'ACTIEF';
     case 'churned': return 'Gearchiveerd';
-    case 'prospect': return 'Prospect';
+    case 'prospect': return 'PROSPECT';
     case 'rejected': return 'Afgewezen';
     default: return status;
   }
@@ -321,11 +323,25 @@ const CustomerDetailView = ({
   const [isAddingLoc, setIsAddingLoc] = useState(false);
   const [isAddingContact, setIsAddingContact] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [editingLocation, setEditingLocation] = useState<Location | null>(null);
+  const [deletingLocation, setDeletingLocation] = useState<Location | null>(null);
+  const [isAnalyzingOrganisatie, setIsAnalyzingOrganisatie] = useState(false);
+  const [isAnalyzingCultuur, setIsAnalyzingCultuur] = useState(false);
+  const [organisatieAnalyseResultaat, setOrganisatieAnalyseResultaat] = useState<string | null>(null);
+  const [cultuurAnalyseResultaat, setCultuurAnalyseResultaat] = useState<string | null>(null);
+  const [analyseStap, setAnalyseStap] = useState(0); // 0 = niet gestart, 1-13 = huidige stap
+  const [cultuurAnalyseStap, setCultuurAnalyseStap] = useState(0); // 0 = niet gestart, 1-12 = huidige stap
+  const [analyseId, setAnalyseId] = useState<string | null>(null);
+  const [hoofdstukkenResultaten, setHoofdstukkenResultaten] = useState<{[key: string]: string}>({});
   
   // New Location Form
   const [locName, setLocName] = useState('');
   const [locAddress, setLocAddress] = useState('');
   const [locCity, setLocCity] = useState('');
+  const [locEmployeeCount, setLocEmployeeCount] = useState<number | undefined>(undefined);
+  
+  // Edit Location Form
+  const [editLocEmployeeCount, setEditLocEmployeeCount] = useState<number | undefined>(undefined);
 
   // New Contact Form
   const [contactFirst, setContactFirst] = useState('');
@@ -351,17 +367,74 @@ const CustomerDetailView = ({
 
   const handleAddLocation = async () => {
     if (!locName || !locAddress) return;
+    
+    // Try to get coordinates from address (using a simple geocoding approach)
+    // For now, we'll add the location and try to find nearest Richting location based on city
+    // In the future, we can integrate a geocoding service to get exact coordinates
+    
     const newLoc: Location = {
       id: `loc_${Date.now()}`,
       customerId: customer.id,
       name: locName,
       address: locAddress,
-      city: locCity
+      city: locCity,
+      employeeCount: locEmployeeCount
     };
+    
+    // Try to find nearest Richting location based on city name
+    // This is a fallback - ideally we'd use coordinates
+    try {
+      const allRichtingLocaties = await richtingLocatiesService.getAllLocaties();
+      // Simple city name matching as fallback
+      const matchingLocatie = allRichtingLocaties.find(rl => 
+        rl.vestiging.toLowerCase().includes(locCity.toLowerCase()) ||
+        locCity.toLowerCase().includes(rl.vestiging.toLowerCase())
+      );
+      
+      if (matchingLocatie) {
+        newLoc.richtingLocatieId = matchingLocatie.id;
+        newLoc.richtingLocatieNaam = matchingLocatie.vestiging;
+      }
+    } catch (e) {
+      console.error("Error finding nearest Richting location:", e);
+    }
+    
     await customerService.addLocation(newLoc);
     setLocations(prev => [...prev, newLoc]);
     setIsAddingLoc(false);
-    setLocName(''); setLocAddress(''); setLocCity('');
+    setLocName(''); setLocAddress(''); setLocCity(''); setLocEmployeeCount(undefined);
+  };
+
+  const handleEditLocation = (location: Location) => {
+    setEditingLocation(location);
+    setEditLocEmployeeCount(location.employeeCount);
+  };
+
+  const handleSaveLocationEdit = async () => {
+    if (!editingLocation) return;
+    
+    const updatedLoc: Location = {
+      ...editingLocation,
+      employeeCount: editLocEmployeeCount
+    };
+    
+    await customerService.addLocation(updatedLoc); // setDoc werkt ook voor updates
+    setLocations(prev => prev.map(loc => loc.id === editingLocation.id ? updatedLoc : loc));
+    setEditingLocation(null);
+    setEditLocEmployeeCount(undefined);
+  };
+
+  const handleDeleteLocation = async () => {
+    if (!deletingLocation) return;
+    
+    try {
+      await customerService.deleteLocation(deletingLocation.id);
+      setLocations(prev => prev.filter(loc => loc.id !== deletingLocation.id));
+      setDeletingLocation(null);
+    } catch (error) {
+      console.error("Error deleting location:", error);
+      alert("Kon locatie niet verwijderen. Probeer het opnieuw.");
+    }
   };
 
   const handleAddContact = async () => {
@@ -508,9 +581,20 @@ const CustomerDetailView = ({
                     <input type="text" placeholder="Naam (bijv. Hoofdkantoor)" className="w-full text-sm border p-2 rounded" value={locName} onChange={e => setLocName(e.target.value)} />
                     <input type="text" placeholder="Adres" className="w-full text-sm border p-2 rounded" value={locAddress} onChange={e => setLocAddress(e.target.value)} />
                     <input type="text" placeholder="Stad" className="w-full text-sm border p-2 rounded" value={locCity} onChange={e => setLocCity(e.target.value)} />
+                    <input 
+                      type="number" 
+                      placeholder="Aantal medewerkers (optioneel)" 
+                      className="w-full text-sm border p-2 rounded" 
+                      value={locEmployeeCount || ''} 
+                      onChange={e => setLocEmployeeCount(e.target.value ? parseInt(e.target.value) : undefined)}
+                      min="0"
+                    />
                     <div className="flex gap-2 pt-2">
                        <button onClick={handleAddLocation} className="bg-richting-orange text-white text-xs px-3 py-2 rounded font-bold">Opslaan</button>
-                       <button onClick={() => setIsAddingLoc(false)} className="text-gray-500 text-xs px-3 py-2">Annuleren</button>
+                       <button onClick={() => {
+                         setIsAddingLoc(false);
+                         setLocName(''); setLocAddress(''); setLocCity(''); setLocEmployeeCount(undefined);
+                       }} className="text-gray-500 text-xs px-3 py-2">Annuleren</button>
                     </div>
                  </div>
               </div>
@@ -519,23 +603,186 @@ const CustomerDetailView = ({
             <div className="space-y-3">
                {locations.length === 0 && !isAddingLoc && <p className="text-sm text-gray-400 italic">Nog geen locaties toegevoegd.</p>}
                {locations.map(loc => (
-                 <div key={loc.id} className="bg-white p-4 rounded-lg border border-gray-100 shadow-sm flex justify-between items-center group">
-                    <div>
-                       <p className="font-bold text-slate-800 text-sm">{loc.name}</p>
-                       <p className="text-xs text-gray-500">{loc.address}, {loc.city}</p>
+                 <div key={loc.id} className="bg-white p-4 rounded-lg border border-gray-100 shadow-sm group hover:border-richting-orange transition-colors">
+                    <div className="flex justify-between items-start mb-2">
+                       <div className="flex-1">
+                          <p className="font-bold text-slate-800 text-sm">{loc.name}</p>
+                          <p className="text-xs text-gray-500">{loc.address}, {loc.city}</p>
+                          {loc.employeeCount ? (
+                            <div className="mt-1 flex items-center gap-1">
+                              <span className="text-xs text-gray-600">👥</span>
+                              <span className="text-xs font-semibold text-richting-orange">{loc.employeeCount.toLocaleString('nl-NL')} medewerkers</span>
+                            </div>
+                          ) : (
+                            <div className="mt-1 flex items-center gap-1">
+                              <span className="text-xs text-gray-400 italic">👥 Geen medewerkersaantal opgegeven</span>
+                            </div>
+                          )}
+                          {loc.richtingLocatieNaam && (
+                            <div className="mt-2 flex items-center gap-1">
+                              <span className="text-xs text-richting-orange font-medium">📍 Dichtstbijzijnde Richting:</span>
+                              <span className="text-xs text-slate-700 font-semibold">{loc.richtingLocatieNaam}</span>
+                            </div>
+                          )}
+                       </div>
+                       <div className="flex items-center gap-1">
+                         <button
+                           onClick={() => handleEditLocation(loc)}
+                           className="text-gray-400 hover:text-richting-orange p-2 flex-shrink-0 transition-colors"
+                           title="Bewerk locatie"
+                         >
+                           <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                           </svg>
+                         </button>
+                         <button
+                           onClick={() => setDeletingLocation(loc)}
+                           className="text-gray-400 hover:text-red-500 p-2 flex-shrink-0 transition-colors"
+                           title="Verwijder locatie"
+                         >
+                           <TrashIcon />
+                         </button>
+                         <a 
+                           href={getGoogleMapsLink(loc)} 
+                           target="_blank" 
+                           rel="noreferrer"
+                           className="text-gray-400 hover:text-richting-orange p-2 flex-shrink-0 transition-colors"
+                           title="Bekijk op kaart"
+                         >
+                           <MapIcon />
+                         </a>
+                       </div>
                     </div>
-                    <a 
-                      href={getGoogleMapsLink(loc)} 
-                      target="_blank" 
-                      rel="noreferrer"
-                      className="text-gray-400 hover:text-richting-orange p-2"
-                      title="Bekijk op kaart"
-                    >
-                      <MapIcon />
-                    </a>
                  </div>
                ))}
             </div>
+            
+            {/* Edit Location Modal */}
+            {editingLocation && (
+              <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm" onClick={() => {
+                setEditingLocation(null);
+                setEditLocEmployeeCount(undefined);
+              }}>
+                <div className="bg-white rounded-xl shadow-2xl w-full max-w-md" onClick={e => e.stopPropagation()}>
+                  <div className="p-6">
+                    <div className="flex justify-between items-center mb-4">
+                      <h3 className="text-lg font-bold text-slate-900">Bewerk Locatie</h3>
+                      <button
+                        onClick={() => {
+                          setEditingLocation(null);
+                          setEditLocEmployeeCount(undefined);
+                        }}
+                        className="text-gray-400 hover:text-gray-600"
+                      >
+                        <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                        </svg>
+                      </button>
+                    </div>
+                    
+                    <div className="space-y-4">
+                      <div>
+                        <p className="font-bold text-slate-800 text-sm mb-1">{editingLocation.name}</p>
+                        <p className="text-xs text-gray-500 mb-4">{editingLocation.address}, {editingLocation.city}</p>
+                      </div>
+                      
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-2">
+                          Aantal medewerkers
+                        </label>
+                        <input
+                          type="number"
+                          placeholder="Voer aantal medewerkers in"
+                          className="w-full text-sm border border-gray-300 rounded-lg px-3 py-2 focus:ring-richting-orange focus:border-richting-orange"
+                          value={editLocEmployeeCount || ''}
+                          onChange={e => setEditLocEmployeeCount(e.target.value ? parseInt(e.target.value) : undefined)}
+                          min="0"
+                        />
+                        {editingLocation.employeeCount && (
+                          <p className="text-xs text-gray-500 mt-1">
+                            Huidig: {editingLocation.employeeCount.toLocaleString('nl-NL')} medewerkers
+                          </p>
+                        )}
+                      </div>
+                      
+                      <div className="flex gap-3 pt-4">
+                        <button
+                          onClick={handleSaveLocationEdit}
+                          className="flex-1 bg-richting-orange text-white px-4 py-2 rounded-lg font-bold hover:bg-orange-600 transition-colors"
+                        >
+                          Opslaan
+                        </button>
+                        <button
+                          onClick={() => {
+                            setEditingLocation(null);
+                            setEditLocEmployeeCount(undefined);
+                          }}
+                          className="flex-1 bg-gray-200 text-gray-700 px-4 py-2 rounded-lg font-bold hover:bg-gray-300 transition-colors"
+                        >
+                          Annuleren
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Delete Location Confirmation Modal */}
+            {deletingLocation && (
+              <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm" onClick={() => setDeletingLocation(null)}>
+                <div className="bg-white rounded-xl shadow-2xl w-full max-w-md" onClick={e => e.stopPropagation()}>
+                  <div className="p-6">
+                    <div className="flex justify-between items-center mb-4">
+                      <h3 className="text-lg font-bold text-slate-900">Locatie Verwijderen</h3>
+                      <button
+                        onClick={() => setDeletingLocation(null)}
+                        className="text-gray-400 hover:text-gray-600"
+                      >
+                        <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                        </svg>
+                      </button>
+                    </div>
+                    
+                    <div className="space-y-4">
+                      <div>
+                        <p className="text-sm text-gray-700 mb-2">
+                          Weet je zeker dat je deze locatie wilt verwijderen?
+                        </p>
+                        <div className="bg-gray-50 p-3 rounded-lg border border-gray-200">
+                          <p className="font-bold text-slate-800 text-sm">{deletingLocation.name}</p>
+                          <p className="text-xs text-gray-500">{deletingLocation.address}, {deletingLocation.city}</p>
+                          {deletingLocation.employeeCount && (
+                            <p className="text-xs text-gray-500 mt-1">
+                              {deletingLocation.employeeCount.toLocaleString('nl-NL')} medewerkers
+                            </p>
+                          )}
+                        </div>
+                        <p className="text-xs text-red-600 mt-2 font-medium">
+                          ⚠️ Deze actie kan niet ongedaan worden gemaakt.
+                        </p>
+                      </div>
+                      
+                      <div className="flex gap-3 pt-4">
+                        <button
+                          onClick={handleDeleteLocation}
+                          className="flex-1 bg-red-500 text-white px-4 py-2 rounded-lg font-bold hover:bg-red-600 transition-colors"
+                        >
+                          Verwijderen
+                        </button>
+                        <button
+                          onClick={() => setDeletingLocation(null)}
+                          className="flex-1 bg-gray-200 text-gray-700 px-4 py-2 rounded-lg font-bold hover:bg-gray-300 transition-colors"
+                        >
+                          Annuleren
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
          </div>
 
          {/* CONTACTS SECTION */}
@@ -584,17 +831,559 @@ const CustomerDetailView = ({
        </div>
 
        {/* ORGANISATIE ANALYSE SECTION */}
-       {organisatieProfiel && (
-         <div className="pt-8 border-t border-gray-200">
-           <h3 className="font-bold text-slate-900 mb-4 text-lg">Organisatie Analyse</h3>
-           <p className="text-sm text-gray-500 mb-4">Analyse datum: {new Date(organisatieProfiel.analyseDatum).toLocaleDateString('nl-NL')}</p>
-           
+       <div className="pt-8 border-t border-gray-200">
+         <div className="flex justify-between items-center mb-4">
+           <h3 className="font-bold text-slate-900 text-lg">Organisatie Analyse</h3>
+           <div className="flex gap-2">
+             <button
+               onClick={async () => {
+                 setIsAnalyzingOrganisatie(true);
+                 setOrganisatieAnalyseResultaat(null);
+                 setAnalyseStap(0);
+                 setHoofdstukkenResultaten({});
+                 
+                 try {
+                   // Start stapsgewijze analyse
+                   const functionsUrl = 'https://europe-west4-richting-sales-d764a.cloudfunctions.net/analyseBrancheStapsgewijs';
+                   const response = await fetch(functionsUrl, {
+                     method: 'POST',
+                     headers: {
+                       'Content-Type': 'application/json',
+                     },
+                     body: JSON.stringify({ 
+                       organisatieNaam: customer.name,
+                       website: customer.website || '',
+                       customerId: customer.id
+                     })
+                   });
+
+                   if (!response.ok) {
+                     const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
+                     throw new Error(`HTTP error! status: ${response.status} - ${errorData.error || 'Unknown error'}`);
+                   }
+
+                   const data = await response.json();
+                   const newAnalyseId = data.analyseId;
+                   if (!newAnalyseId) {
+                     throw new Error('Geen analyseId ontvangen van server');
+                   }
+                   setAnalyseId(newAnalyseId);
+                   
+                   // Poll for progress
+                   const progressUrl = 'https://europe-west4-richting-sales-d764a.cloudfunctions.net/getAnalyseProgress';
+                   const pollInterval = setInterval(async () => {
+                     try {
+                       const progressResponse = await fetch(`${progressUrl}?analyseId=${newAnalyseId}`);
+                       if (!progressResponse.ok) {
+                         clearInterval(pollInterval);
+                         return;
+                       }
+                       
+                       const progress = await progressResponse.json();
+                       
+                       // Update progress
+                       setAnalyseStap(progress.progress.huidigeStap || 0);
+                       
+                       // Update hoofdstukken resultaten
+                       const nieuweResultaten: {[key: string]: string} = {};
+                       Object.keys(progress.hoofdstukken || {}).forEach(key => {
+                         const hoofdstuk = progress.hoofdstukken[key];
+                         if (hoofdstuk.status === 'completed' && hoofdstuk.content) {
+                           nieuweResultaten[key] = hoofdstuk.content;
+                         }
+                       });
+                       setHoofdstukkenResultaten(nieuweResultaten);
+                       
+                       // Check if completed
+                       if (progress.status === 'completed') {
+                         clearInterval(pollInterval);
+                         setIsAnalyzingOrganisatie(false);
+                         
+                         // Show volledig rapport if available
+                         if (progress.volledigRapport) {
+                           setOrganisatieAnalyseResultaat(progress.volledigRapport);
+                         } else {
+                           // Combine all hoofdstukken
+                           const combined = Object.keys(nieuweResultaten).sort().map(key => {
+                             const hoofdstukTitels: {[key: string]: string} = {
+                               '1': 'Introductie en Branche-identificatie',
+                               '2': 'SBI-codes en Bedrijfsinformatie',
+                               '3': 'Arbocatalogus en Branche-RI&E',
+                               '4': 'Risicocategorieën en Kwantificering',
+                               '5': 'Primaire Processen in de Branche',
+                               '6': 'Werkzaamheden en Functies',
+                               '7': 'Verzuim in de Branche',
+                               '8': 'Beroepsziekten in de Branche',
+                               '9': 'Gevaarlijke Stoffen en Risico\'s',
+                               '10': 'Risicomatrices',
+                               '11': 'Vooruitblik en Speerpunten',
+                               '12': 'Stappenplan voor een Preventieve Samenwerking',
+                               '13': 'Bronvermeldingen'
+                             };
+                             return `## Hoofdstuk ${key}: ${hoofdstukTitels[key] || `Hoofdstuk ${key}`}\n\n${nieuweResultaten[key]}\n\n`;
+                           }).join('');
+                           setOrganisatieAnalyseResultaat(combined);
+                         }
+                         
+                         // Reload organisatie profiel
+                         const profiel = await customerService.getOrganisatieProfiel(customer.id);
+                         if (profiel) {
+                           setOrganisatieProfiel(profiel);
+                         }
+                       } else if (progress.status === 'failed') {
+                         clearInterval(pollInterval);
+                         setIsAnalyzingOrganisatie(false);
+                         setOrganisatieAnalyseResultaat(`Fout bij analyse: ${progress.error || 'Onbekende fout'}`);
+                       }
+                     } catch (pollError) {
+                       console.error("Error polling progress:", pollError);
+                     }
+                   }, 2000); // Poll every 2 seconds
+                   
+                   // Cleanup on unmount
+                   return () => clearInterval(pollInterval);
+                 } catch (error: any) {
+                   console.error("Organisatie analyse error:", error);
+                   setOrganisatieAnalyseResultaat(`Fout bij starten analyse: ${error.message || 'Onbekende fout'}`);
+                   setIsAnalyzingOrganisatie(false);
+                 }
+               }}
+               disabled={isAnalyzingOrganisatie}
+               className="bg-richting-orange text-white px-4 py-2 rounded-lg text-sm font-bold hover:bg-orange-600 disabled:opacity-50 transition-colors flex items-center gap-2"
+             >
+               {isAnalyzingOrganisatie ? "⏳ Analyseren..." : "📊 Publiek Organisatie Profiel"}
+             </button>
+             <button
+               onClick={async () => {
+                 setIsAnalyzingCultuur(true);
+                 setCultuurAnalyseResultaat(null);
+                 setCultuurAnalyseStap(0);
+                 
+                 // Start progress steps for cultuur analyse
+                 const cultuurStappen = [
+                   "CultuurDNA Analyse",
+                   "Cultuurvolwassenheid Assessment",
+                   "Performance & Engagement Analyse",
+                   "Gaps & Barrières Identificatie",
+                   "Opportuniteiten & Thema's",
+                   "Gedragingen Analyse",
+                   "Interventies & Actieplan",
+                   "Risico's Psychosociale Arbeidsbelasting",
+                   "Aanbevelingen Formulering",
+                   "Prioriteitsmatrix Opstellen",
+                   "Rapportage Genereren",
+                   "Resultaat Opslaan"
+                 ];
+                 
+                 // Simulate progress through steps
+                 const stepInterval = setInterval(() => {
+                   setCultuurAnalyseStap(prev => {
+                     if (prev >= 12) {
+                       clearInterval(stepInterval);
+                       return 12;
+                     }
+                     return prev + 1;
+                   });
+                 }, 2000); // Update every 2 seconds
+                 
+                 try {
+                   // Use Firebase Function to get active prompt from Firestore
+                   const functionsUrl = 'https://europe-west4-richting-sales-d764a.cloudfunctions.net/analyseCultuurTest';
+                   const response = await fetch(functionsUrl, {
+                     method: 'POST',
+                     headers: {
+                       'Content-Type': 'application/json',
+                     },
+                     body: JSON.stringify({ 
+                       organisatieNaam: customer.name,
+                       website: customer.website || ''
+                     })
+                   });
+
+                   if (!response.ok) {
+                     throw new Error(`HTTP error! status: ${response.status}`);
+                   }
+
+                   const data = await response.json();
+                   
+                   // The Firebase Function returns JSON with the full cultuur profiel
+                   // Use volledigRapport if available, otherwise format the JSON
+                   let result = '';
+                   if (data.volledigRapport) {
+                     result = data.volledigRapport;
+                   } else {
+                     // Format as markdown
+                     result = `# Cultuur Analyse Resultaat\n\n`;
+                     if (data.scores) {
+                       result += `## The Executive Pulse\n\n`;
+                       result += `- Cultuurvolwassenheid: ${data.scores.cultuurvolwassenheid || 0}/100\n`;
+                       result += `- Groeidynamiek: ${data.scores.groeidynamiekScore || 0}/100\n`;
+                       result += `- Cultuurfit: ${data.scores.cultuurfit || 0}/100\n`;
+                       result += `- Cultuursterkte: ${data.scores.cultuursterkte || 'gemiddeld'}\n`;
+                       result += `- Dynamiek Type: ${data.scores.dynamiekType || 'organisch_groeiend'}\n\n`;
+                     }
+                     if (data.dna) {
+                       result += `## Het Cultuur DNA\n\n`;
+                       result += `- Dominant Type: ${data.dna.dominantType || 'hybride'}\n`;
+                       if (data.dna.kernwaarden && data.dna.kernwaarden.length > 0) {
+                         result += `\n### Kernwaarden:\n`;
+                         data.dna.kernwaarden.forEach((kw: any) => {
+                           result += `- ${kw.waarde}: ${kw.score || 0}/100 (${kw.status || 'neutraal'})\n`;
+                         });
+                       }
+                     }
+                     if (data.gaps && data.gaps.length > 0) {
+                       result += `\n## Gaps & Barrières\n\n`;
+                       data.gaps.forEach((gap: any) => {
+                         result += `- ${gap.dimensie}: Gap van ${gap.gap || 0} (Urgentie: ${gap.urgentie || 'gemiddeld'})\n`;
+                       });
+                     }
+                     if (data.interventies && data.interventies.length > 0) {
+                       result += `\n## Interventies & Actieplan\n\n`;
+                       data.interventies.forEach((int: any) => {
+                         result += `- ${int.naam} (${int.type || 'strategisch'}): ${int.beschrijving || ''}\n`;
+                       });
+                     }
+                   }
+                   
+                   clearInterval(stepInterval);
+                   setCultuurAnalyseStap(12); // Mark all steps as complete
+                   setCultuurAnalyseResultaat(result);
+                   
+                   // Save to Firestore as CultuurProfiel (if we have a collection for this)
+                   // Note: This might need to be added to customerService if not already present
+                 } catch (error) {
+                   clearInterval(stepInterval);
+                   console.error("Cultuur analyse error:", error);
+                   setCultuurAnalyseResultaat("Fout bij analyse. Probeer het opnieuw.");
+                   setCultuurAnalyseStap(0);
+                 } finally {
+                   setIsAnalyzingCultuur(false);
+                 }
+               }}
+               disabled={isAnalyzingCultuur}
+               className="bg-slate-700 text-white px-4 py-2 rounded-lg text-sm font-bold hover:bg-slate-600 disabled:opacity-50 transition-colors flex items-center gap-2"
+             >
+               {isAnalyzingCultuur ? "⏳ Analyseren..." : "🎭 Cultuur Analyse"}
+             </button>
+           </div>
+         </div>
+
+         {/* Analyse Progress Steps */}
+         {isAnalyzingOrganisatie && (
+           <div className="bg-white border border-gray-200 rounded-lg p-6 mb-4">
+             <h4 className="font-bold text-slate-900 mb-4 flex items-center gap-2">
+               <span className="animate-spin">⏳</span> Analyse in uitvoering...
+             </h4>
+             <div className="space-y-3">
+               {[
+                 "Inleiding en Branche-identificatie",
+                 "SBI-codes en Bedrijfsinformatie",
+                 "Arbocatalogus en Branche-RI&E",
+                 "Risicocategorieën en Kwantificering",
+                 "Primaire Processen in de Branche",
+                 "Werkzaamheden en Functies",
+                 "Verzuim in de Branche",
+                 "Beroepsziekten in de Branche",
+                 "Gevaarlijke Stoffen en Risico's",
+                 "Risicomatrices",
+                 "Vooruitblik en Speerpunten",
+                 "Stappenplan voor een Preventieve Samenwerking",
+                 "Bronvermeldingen"
+               ].map((stap, index) => {
+                 const stapNummer = index + 1;
+                 const isVoltooid = analyseStap > stapNummer;
+                 const isHuidige = analyseStap === stapNummer;
+                 
+                 return (
+                   <div 
+                     key={index}
+                     className={`flex items-center gap-3 p-2 rounded transition-colors ${
+                       isHuidige ? 'bg-orange-50 border border-orange-200' : ''
+                     }`}
+                   >
+                     <div className={`w-6 h-6 rounded-full flex items-center justify-center flex-shrink-0 ${
+                       isVoltooid 
+                         ? 'bg-green-500 text-white' 
+                         : isHuidige 
+                         ? 'bg-richting-orange text-white animate-pulse' 
+                         : 'bg-gray-200 text-gray-400'
+                     }`}>
+                       {isVoltooid ? (
+                         <span className="text-xs font-bold">✓</span>
+                       ) : isHuidige ? (
+                         <span className="text-xs font-bold animate-spin">⟳</span>
+                       ) : (
+                         <span className="text-xs font-bold">{stapNummer}</span>
+                       )}
+                     </div>
+                     <span className={`text-sm ${
+                       isVoltooid 
+                         ? 'text-gray-600 line-through' 
+                         : isHuidige 
+                         ? 'text-richting-orange font-bold' 
+                         : 'text-gray-400'
+                     }`}>
+                       {stapNummer}. {stap}
+                     </span>
+                   </div>
+                 );
+               })}
+             </div>
+             <div className="mt-4 pt-4 border-t border-gray-200">
+               <div className="flex items-center justify-between text-xs text-gray-500">
+                 <span>Voortgang: {analyseStap} van 13 stappen</span>
+                 <div className="w-32 bg-gray-200 rounded-full h-2">
+                   <div 
+                     className="bg-richting-orange h-2 rounded-full transition-all duration-300"
+                     style={{ width: `${(analyseStap / 13) * 100}%` }}
+                   ></div>
+                 </div>
+               </div>
+             </div>
+             
+             {/* Tussentijds Resultaten per Hoofdstuk */}
+             {Object.keys(hoofdstukkenResultaten).length > 0 && (
+               <div className="mt-4 pt-4 border-t border-gray-200">
+                 <h5 className="text-sm font-bold text-slate-900 mb-3">Tussentijds Resultaten:</h5>
+                 <div className="space-y-3 max-h-96 overflow-y-auto">
+                   {Object.keys(hoofdstukkenResultaten).sort().map(key => {
+                     const hoofdstukTitels: {[key: string]: string} = {
+                       '1': 'Introductie en Branche-identificatie',
+                       '2': 'SBI-codes en Bedrijfsinformatie',
+                       '3': 'Arbocatalogus en Branche-RI&E',
+                       '4': 'Risicocategorieën en Kwantificering',
+                       '5': 'Primaire Processen in de Branche',
+                       '6': 'Werkzaamheden en Functies',
+                       '7': 'Verzuim in de Branche',
+                       '8': 'Beroepsziekten in de Branche',
+                       '9': 'Gevaarlijke Stoffen en Risico\'s',
+                       '10': 'Risicomatrices',
+                       '11': 'Vooruitblik en Speerpunten',
+                       '12': 'Stappenplan voor een Preventieve Samenwerking',
+                       '13': 'Bronvermeldingen'
+                     };
+                     return (
+                       <div key={key} className="bg-green-50 border border-green-200 rounded p-3">
+                         <h6 className="text-xs font-bold text-green-700 mb-1">
+                           ✅ Hoofdstuk {key}: {hoofdstukTitels[key] || `Hoofdstuk ${key}`}
+                         </h6>
+                         <p className="text-xs text-gray-600 line-clamp-3">
+                           {hoofdstukkenResultaten[key].substring(0, 200)}...
+                         </p>
+                       </div>
+                     );
+                   })}
+                 </div>
+               </div>
+             )}
+           </div>
+         )}
+
+         {/* Analyse Resultaten */}
+         {organisatieAnalyseResultaat && (
+           <div className="bg-orange-50 border border-orange-200 rounded-lg p-4 mb-4">
+             <h4 className="font-bold text-richting-orange mb-2 flex items-center gap-2">📊 Publiek Organisatie Profiel Resultaat</h4>
+             <div className="text-sm text-gray-700 whitespace-pre-wrap max-h-96 overflow-y-auto">
+               {organisatieAnalyseResultaat}
+             </div>
+           </div>
+         )}
+
+         {/* Cultuur Analyse Progress Steps */}
+         {isAnalyzingCultuur && (
+           <div className="bg-white border border-gray-200 rounded-lg p-6 mb-4">
+             <h4 className="font-bold text-slate-900 mb-4 flex items-center gap-2">
+               <span className="animate-spin">⏳</span> Cultuur Analyse in uitvoering...
+             </h4>
+             <div className="space-y-3">
+               {[
+                 "CultuurDNA Analyse",
+                 "Cultuurvolwassenheid Assessment",
+                 "Performance & Engagement Analyse",
+                 "Gaps & Barrières Identificatie",
+                 "Opportuniteiten & Thema's",
+                 "Gedragingen Analyse",
+                 "Interventies & Actieplan",
+                 "Risico's Psychosociale Arbeidsbelasting",
+                 "Aanbevelingen Formulering",
+                 "Prioriteitsmatrix Opstellen",
+                 "Rapportage Genereren",
+                 "Resultaat Opslaan"
+               ].map((stap, index) => {
+                 const stapNummer = index + 1;
+                 const isVoltooid = cultuurAnalyseStap > stapNummer;
+                 const isHuidige = cultuurAnalyseStap === stapNummer;
+                 
+                 return (
+                   <div 
+                     key={index}
+                     className={`flex items-center gap-3 p-2 rounded transition-colors ${
+                       isHuidige ? 'bg-slate-50 border border-slate-200' : ''
+                     }`}
+                   >
+                     <div className={`w-6 h-6 rounded-full flex items-center justify-center flex-shrink-0 ${
+                       isVoltooid 
+                         ? 'bg-green-500 text-white' 
+                         : isHuidige 
+                         ? 'bg-slate-700 text-white animate-pulse' 
+                         : 'bg-gray-200 text-gray-400'
+                     }`}>
+                       {isVoltooid ? (
+                         <span className="text-xs font-bold">✓</span>
+                       ) : isHuidige ? (
+                         <span className="text-xs font-bold animate-spin">⟳</span>
+                       ) : (
+                         <span className="text-xs font-bold">{stapNummer}</span>
+                       )}
+                     </div>
+                     <span className={`text-sm ${
+                       isVoltooid 
+                         ? 'text-gray-600 line-through' 
+                         : isHuidige 
+                         ? 'text-slate-700 font-bold' 
+                         : 'text-gray-400'
+                     }`}>
+                       {stapNummer}. {stap}
+                     </span>
+                   </div>
+                 );
+               })}
+             </div>
+             <div className="mt-4 pt-4 border-t border-gray-200">
+               <div className="flex items-center justify-between text-xs text-gray-500">
+                 <span>Voortgang: {cultuurAnalyseStap} van 12 stappen</span>
+                 <div className="w-32 bg-gray-200 rounded-full h-2">
+                   <div 
+                     className="bg-slate-700 h-2 rounded-full transition-all duration-300"
+                     style={{ width: `${(cultuurAnalyseStap / 12) * 100}%` }}
+                   ></div>
+                 </div>
+               </div>
+             </div>
+           </div>
+         )}
+
+         {cultuurAnalyseResultaat && (
+           <div className="bg-slate-50 border border-slate-200 rounded-lg p-4 mb-4">
+             <h4 className="font-bold text-slate-700 mb-2 flex items-center gap-2">🎭 Cultuur Analyse Resultaat</h4>
+             <p className="text-sm text-gray-700 whitespace-pre-wrap">{cultuurAnalyseResultaat}</p>
+           </div>
+         )}
+
+         {organisatieProfiel && (
+           <>
+             {/* Header met Organisatie Info */}
+             <div className="bg-gradient-to-r from-richting-orange to-orange-600 rounded-xl shadow-lg p-6 mb-6 text-white">
+               <div className="flex items-center justify-between mb-4">
+                 <div>
+                   <h3 className="text-2xl font-bold mb-1">Publiek Organisatie Profiel</h3>
+                   <p className="text-orange-100 text-sm">{organisatieProfiel.organisatieNaam || customer.name}</p>
+                 </div>
+                 <div className="text-right">
+                   <p className="text-xs text-orange-100 mb-1">Analyse Datum</p>
+                   <p className="text-sm font-bold">{new Date(organisatieProfiel.analyseDatum).toLocaleDateString('nl-NL')}</p>
+                 </div>
+               </div>
+               <div className="grid grid-cols-3 gap-4 mt-4 pt-4 border-t border-orange-400/30">
+                 <div>
+                   <p className="text-xs text-orange-100 mb-1">Risico's</p>
+                   <p className="text-2xl font-bold">{organisatieProfiel.risicos?.length || 0}</p>
+                 </div>
+                 <div>
+                   <p className="text-xs text-orange-100 mb-1">Processen</p>
+                   <p className="text-2xl font-bold">{organisatieProfiel.processen?.length || 0}</p>
+                 </div>
+                 <div>
+                   <p className="text-xs text-orange-100 mb-1">Functies</p>
+                   <p className="text-2xl font-bold">{organisatieProfiel.functies?.length || 0}</p>
+                 </div>
+               </div>
+             </div>
+
+           {/* Risico's Overzicht */}
+           {organisatieProfiel.risicos && organisatieProfiel.risicos.length > 0 && (
+             <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 mb-6">
+               <h4 className="text-xl font-bold text-slate-900 mb-4 flex items-center gap-2">
+                 <span className="text-2xl">⚠️</span> Risico Overzicht
+               </h4>
+               <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+                 {['psychisch', 'fysiek', 'overige'].map(cat => {
+                   const risicosInCat = organisatieProfiel.risicos.filter(r => r.categorie === cat);
+                   const gemiddeldeRisico = risicosInCat.length > 0
+                     ? risicosInCat.reduce((sum, r) => {
+                         const kans = convertKansToFineKinney(r.kans);
+                         const effect = convertEffectToFineKinney(r.effect);
+                         return sum + (kans * effect);
+                       }, 0) / risicosInCat.length
+                     : 0;
+                   const categorieLabels = { 'psychisch': 'Psychisch', 'fysiek': 'Fysiek', 'overige': 'Overige' };
+                   const categorieColors = {
+                     'psychisch': 'bg-purple-100 text-purple-700 border-purple-200',
+                     'fysiek': 'bg-blue-100 text-blue-700 border-blue-200',
+                     'overige': 'bg-gray-100 text-gray-700 border-gray-200'
+                   };
+                   return (
+                     <div key={cat} className={`p-4 rounded-lg border-2 ${categorieColors[cat as keyof typeof categorieColors]}`}>
+                       <p className="text-sm font-bold mb-2">{categorieLabels[cat as keyof typeof categorieLabels]}</p>
+                       <p className="text-3xl font-bold mb-1">{risicosInCat.length}</p>
+                       <p className="text-xs opacity-75">Gemiddeld risico: {Math.round(gemiddeldeRisico)}</p>
+                     </div>
+                   );
+                 })}
+               </div>
+               <div className="space-y-2 max-h-64 overflow-y-auto">
+                 {organisatieProfiel.risicos
+                   .map(risico => {
+                     const kans = convertKansToFineKinney(risico.kans);
+                     const effect = convertEffectToFineKinney(risico.effect);
+                     const risicogetal = kans * effect;
+                     const prioriteitNiveau = risicogetal >= 400 ? 1 : risicogetal >= 200 ? 2 : risicogetal >= 100 ? 3 : risicogetal >= 50 ? 4 : 5;
+                     return { risico, kans, effect, risicogetal, prioriteitNiveau };
+                   })
+                   .sort((a, b) => b.risicogetal - a.risicogetal)
+                   .slice(0, 10)
+                   .map(({ risico, kans, effect, risicogetal, prioriteitNiveau }) => {
+                     const prioriteitLabels = ['Zeer hoog', 'Hoog', 'Middel', 'Laag', 'Zeer laag'];
+                     const prioriteitColors = ['bg-red-100 text-red-700 border-red-300', 'bg-orange-100 text-orange-700 border-orange-300', 'bg-yellow-100 text-yellow-700 border-yellow-300', 'bg-blue-100 text-blue-700 border-blue-300', 'bg-green-100 text-green-700 border-green-300'];
+                     const categorieColors = {
+                       'psychisch': 'bg-purple-50 text-purple-700',
+                       'fysiek': 'bg-blue-50 text-blue-700',
+                       'overige': 'bg-gray-50 text-gray-700'
+                     };
+                     return (
+                       <div key={risico.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg border border-gray-200 hover:border-richting-orange transition-colors">
+                         <div className="flex-1">
+                           <div className="flex items-center gap-2 mb-1">
+                             <span className={`px-2 py-0.5 rounded text-xs font-medium ${categorieColors[risico.categorie] || categorieColors.overige}`}>
+                               {risico.categorie}
+                             </span>
+                             <span className="text-sm font-bold text-slate-900">{risico.naam}</span>
+                           </div>
+                           <div className="flex items-center gap-4 text-xs text-gray-500">
+                             <span>Kans: {kans}</span>
+                             <span>Effect: {effect}</span>
+                             <span className="font-bold text-slate-700">Risico: {risicogetal}</span>
+                           </div>
+                         </div>
+                         <span className={`px-3 py-1 rounded text-xs font-bold border ${prioriteitColors[prioriteitNiveau - 1]}`}>
+                           {prioriteitNiveau}. {prioriteitLabels[prioriteitNiveau - 1]}
+                         </span>
+                       </div>
+                     );
+                   })}
+               </div>
+             </div>
+           )}
+
            {/* Processen en Functies Overzicht */}
            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
              {/* Processen */}
-             <div className="bg-white border border-gray-200 rounded-lg p-4">
-              <h4 className="font-bold text-slate-900 mb-3">Processen ({organisatieProfiel.processen?.length || 0})</h4>
-              <div className="space-y-2 max-h-96 overflow-y-auto">
+             <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-6">
+              <h4 className="text-xl font-bold text-slate-900 mb-4 flex items-center gap-2">
+                <span className="text-2xl">⚙️</span> Processen ({organisatieProfiel.processen?.length || 0})
+              </h4>
+              <div className="space-y-3 max-h-96 overflow-y-auto">
                 {organisatieProfiel.processen
                   ?.map(proces => {
                     const risicos = proces.risicos || [];
@@ -602,16 +1391,10 @@ const CustomerDetailView = ({
                     const risicosMetBerekening = risicos.map(item => {
                       const risico = item.risico || organisatieProfiel.risicos.find(r => r.id === item.risicoId);
                       if (!risico) return null;
-                      const blootstelling = item.blootstelling || risico.blootstelling || 3;
-                      // Gebruik opgeslagen risicogetal als basis, pas aan met blootstelling van proces/functie
-                      const basisBlootstelling = risico.blootstelling || 3;
-                      const basisRisicogetal = risico.risicogetal || (basisBlootstelling * convertKansToFineKinney(risico.kans) * convertEffectToFineKinney(risico.effect));
-                      // Als basisBlootstelling 0 is, gebruik directe berekening
-                      const risicogetal = basisBlootstelling > 0 
-                        ? (blootstelling / basisBlootstelling) * basisRisicogetal
-                        : blootstelling * convertKansToFineKinney(risico.kans) * convertEffectToFineKinney(risico.effect);
+                      const blootstelling = item.blootstelling || 3;
                       const kans = convertKansToFineKinney(risico.kans);
                       const effect = convertEffectToFineKinney(risico.effect);
+                      const risicogetal = blootstelling * kans * effect;
                       return { risico, blootstelling, kans, effect, risicogetal };
                     }).filter(Boolean);
                     const gemiddeldePrioriteit = risicosMetBerekening.length > 0 
@@ -629,17 +1412,22 @@ const CustomerDetailView = ({
                       <div 
                         key={proces.id} 
                         onClick={() => setSelectedProces(proces)}
-                        className="p-3 border border-gray-200 rounded cursor-pointer hover:border-richting-orange transition-colors"
+                        className="p-4 bg-gradient-to-r from-gray-50 to-white border-2 border-gray-200 rounded-lg cursor-pointer hover:border-richting-orange hover:shadow-md transition-all group"
                       >
-                        <div className="flex justify-between items-start">
+                        <div className="flex justify-between items-start mb-2">
                           <div className="flex-1">
-                            <h5 className="font-bold text-sm text-slate-900">{proces.naam}</h5>
-                            <p className="text-xs text-gray-500 mt-1 line-clamp-2">{proces.beschrijving}</p>
-                            <p className="text-xs text-gray-400 mt-1">{risicos.length} risico's</p>
+                            <h5 className="font-bold text-base text-slate-900 group-hover:text-richting-orange transition-colors">{proces.naam}</h5>
+                            <p className="text-sm text-gray-600 mt-1 line-clamp-2">{proces.beschrijving}</p>
                           </div>
-                          <span className={`px-2 py-1 rounded text-xs font-bold ${prioriteitColors[prioriteitNiveau - 1]}`}>
+                          <span className={`px-3 py-1.5 rounded-lg text-xs font-bold border-2 ml-3 flex-shrink-0 ${prioriteitColors[prioriteitNiveau - 1]}`}>
                             {prioriteitNiveau}. {prioriteitLabels[prioriteitNiveau - 1]}
                           </span>
+                        </div>
+                        <div className="flex items-center gap-4 mt-3 pt-3 border-t border-gray-200">
+                          <span className="text-xs text-gray-500 flex items-center gap-1">
+                            <span className="text-richting-orange">⚠️</span> {risicos.length} risico{risicos.length !== 1 ? "'s" : ""}
+                          </span>
+                          <span className="text-xs text-richting-orange font-medium group-hover:underline">Details bekijken →</span>
                         </div>
                       </div>
                     );
@@ -648,9 +1436,11 @@ const CustomerDetailView = ({
              </div>
 
              {/* Functies */}
-             <div className="bg-white border border-gray-200 rounded-lg p-4">
-              <h4 className="font-bold text-slate-900 mb-3">Functies ({organisatieProfiel.functies?.length || 0})</h4>
-              <div className="space-y-2 max-h-96 overflow-y-auto">
+             <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-6">
+              <h4 className="text-xl font-bold text-slate-900 mb-4 flex items-center gap-2">
+                <span className="text-2xl">👥</span> Functies ({organisatieProfiel.functies?.length || 0})
+              </h4>
+              <div className="space-y-3 max-h-96 overflow-y-auto">
                 {organisatieProfiel.functies
                   ?.map(functie => {
                     const risicos = functie.risicos || [];
@@ -658,16 +1448,10 @@ const CustomerDetailView = ({
                     const risicosMetBerekening = risicos.map(item => {
                       const risico = item.risico || organisatieProfiel.risicos.find(r => r.id === item.risicoId);
                       if (!risico) return null;
-                      const blootstelling = item.blootstelling || risico.blootstelling || 3;
-                      // Gebruik opgeslagen risicogetal als basis, pas aan met blootstelling van proces/functie
-                      const basisBlootstelling = risico.blootstelling || 3;
-                      const basisRisicogetal = risico.risicogetal || (basisBlootstelling * convertKansToFineKinney(risico.kans) * convertEffectToFineKinney(risico.effect));
-                      // Als basisBlootstelling 0 is, gebruik directe berekening
-                      const risicogetal = basisBlootstelling > 0 
-                        ? (blootstelling / basisBlootstelling) * basisRisicogetal
-                        : blootstelling * convertKansToFineKinney(risico.kans) * convertEffectToFineKinney(risico.effect);
+                      const blootstelling = item.blootstelling || 3;
                       const kans = convertKansToFineKinney(risico.kans);
                       const effect = convertEffectToFineKinney(risico.effect);
+                      const risicogetal = blootstelling * kans * effect;
                       return { risico, blootstelling, kans, effect, risicogetal };
                     }).filter(Boolean);
                     const gemiddeldePrioriteit = risicosMetBerekening.length > 0 
@@ -685,22 +1469,44 @@ const CustomerDetailView = ({
                       <div 
                         key={functie.id} 
                         onClick={() => setSelectedFunctie(functie)}
-                        className="p-3 border border-gray-200 rounded cursor-pointer hover:border-richting-orange transition-colors"
+                        className="p-4 bg-gradient-to-r from-gray-50 to-white border-2 border-gray-200 rounded-lg cursor-pointer hover:border-richting-orange hover:shadow-md transition-all group"
                       >
-                        <div className="flex justify-between items-start">
+                        <div className="flex justify-between items-start mb-2">
                           <div className="flex-1">
-                            <h5 className="font-bold text-sm text-slate-900">{functie.naam}</h5>
-                            <p className="text-xs text-gray-500 mt-1 line-clamp-2">{functie.beschrijving}</p>
-                            {functie.fysiek !== undefined && functie.psychisch !== undefined && (
-                              <p className="text-xs text-gray-400 mt-1">
-                                Fysiek: {functie.fysiek}/5, Psychisch: {functie.psychisch}/5
-                              </p>
-                            )}
-                            <p className="text-xs text-gray-400 mt-1">{risicos.length} risico's</p>
+                            <h5 className="font-bold text-base text-slate-900 group-hover:text-richting-orange transition-colors">{functie.naam}</h5>
+                            <p className="text-sm text-gray-600 mt-1 line-clamp-2">{functie.beschrijving}</p>
                           </div>
-                          <span className={`px-2 py-1 rounded text-xs font-bold ${prioriteitColors[prioriteitNiveau - 1]}`}>
+                          <span className={`px-3 py-1.5 rounded-lg text-xs font-bold border-2 ml-3 flex-shrink-0 ${prioriteitColors[prioriteitNiveau - 1]}`}>
                             {prioriteitNiveau}. {prioriteitLabels[prioriteitNiveau - 1]}
                           </span>
+                        </div>
+                        {functie.fysiek !== undefined && functie.psychisch !== undefined && (
+                          <div className="flex items-center gap-4 mt-2 mb-2">
+                            <div className="flex items-center gap-1">
+                              <span className="text-xs text-gray-500">💪 Fysiek:</span>
+                              <div className="flex gap-0.5">
+                                {[1, 2, 3, 4, 5].map(i => (
+                                  <div key={i} className={`w-3 h-3 rounded-full ${i <= functie.fysiek ? 'bg-blue-500' : 'bg-gray-200'}`} />
+                                ))}
+                              </div>
+                              <span className="text-xs font-bold text-blue-600 ml-1">{functie.fysiek}/5</span>
+                            </div>
+                            <div className="flex items-center gap-1">
+                              <span className="text-xs text-gray-500">🧠 Psychisch:</span>
+                              <div className="flex gap-0.5">
+                                {[1, 2, 3, 4, 5].map(i => (
+                                  <div key={i} className={`w-3 h-3 rounded-full ${i <= functie.psychisch ? 'bg-purple-500' : 'bg-gray-200'}`} />
+                                ))}
+                              </div>
+                              <span className="text-xs font-bold text-purple-600 ml-1">{functie.psychisch}/5</span>
+                            </div>
+                          </div>
+                        )}
+                        <div className="flex items-center gap-4 mt-3 pt-3 border-t border-gray-200">
+                          <span className="text-xs text-gray-500 flex items-center gap-1">
+                            <span className="text-richting-orange">⚠️</span> {risicos.length} risico{risicos.length !== 1 ? "'s" : ""}
+                          </span>
+                          <span className="text-xs text-richting-orange font-medium group-hover:underline">Details bekijken →</span>
                         </div>
                       </div>
                     );
@@ -709,17 +1515,33 @@ const CustomerDetailView = ({
              </div>
            </div>
 
+           {/* Volledig Rapport */}
+           {organisatieProfiel.volledigRapport && (
+             <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 mb-6">
+               <h4 className="text-xl font-bold text-slate-900 mb-4 flex items-center gap-2">
+                 <span className="text-2xl">📄</span> Volledig Rapport
+               </h4>
+               <div className="prose max-w-none">
+                 <div className="bg-gray-50 rounded-lg p-6 border border-gray-200 max-h-96 overflow-y-auto">
+                   <div className="text-sm text-gray-700 whitespace-pre-wrap font-sans">
+                     {organisatieProfiel.volledigRapport}
+                   </div>
+                 </div>
+               </div>
+             </div>
+           )}
+
            {/* Detail Modal voor Proces of Functie */}
            {(selectedProces || selectedFunctie) && (
-             <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
-               <div className="bg-white rounded-xl shadow-2xl w-full max-w-4xl max-h-[90vh] overflow-hidden">
-                 <div className="bg-gray-50 px-6 py-4 border-b border-gray-200 flex justify-between items-center">
-                   <h3 className="font-bold text-slate-800">
-                     {selectedProces ? `Proces: ${selectedProces.naam}` : `Functie: ${selectedFunctie?.naam}`}
+             <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm animate-fade-in">
+               <div className="bg-white rounded-xl shadow-2xl w-full max-w-5xl max-h-[90vh] overflow-hidden">
+                 <div className="bg-gradient-to-r from-richting-orange to-orange-600 px-6 py-4 flex justify-between items-center">
+                   <h3 className="font-bold text-white text-lg">
+                     {selectedProces ? `⚙️ Proces: ${selectedProces.naam}` : `👥 Functie: ${selectedFunctie?.naam}`}
                    </h3>
                    <button 
                      onClick={() => { setSelectedProces(null); setSelectedFunctie(null); }}
-                     className="text-gray-400 hover:text-gray-600"
+                     className="text-white hover:text-gray-200 text-2xl font-bold w-8 h-8 flex items-center justify-center rounded-full hover:bg-white/20 transition-colors"
                    >
                      ✕
                    </button>
@@ -727,19 +1549,23 @@ const CustomerDetailView = ({
                  <div className="p-6 overflow-y-auto max-h-[calc(90vh-120px)]">
                    {selectedProces && (
                      <>
-                       <p className="text-sm text-gray-600 mb-4">{selectedProces.beschrijving}</p>
-                       <h4 className="font-bold text-slate-900 mb-3">Risico's ({selectedProces.risicos?.length || 0})</h4>
-                       <div className="overflow-x-auto">
+                       <div className="bg-blue-50 border-l-4 border-blue-500 p-4 rounded mb-6">
+                         <p className="text-sm text-gray-700 leading-relaxed">{selectedProces.beschrijving}</p>
+                       </div>
+                       <h4 className="font-bold text-slate-900 mb-4 text-lg flex items-center gap-2">
+                         <span>⚠️</span> Risico's ({selectedProces.risicos?.length || 0})
+                       </h4>
+                       <div className="overflow-x-auto border border-gray-200 rounded-lg">
                          <table className="min-w-full divide-y divide-gray-200">
-                           <thead className="bg-gray-50">
+                           <thead className="bg-gradient-to-r from-gray-100 to-gray-50">
                              <tr>
-                               <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Risico</th>
-                               <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Categorie</th>
-                               <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Blootstelling (B)</th>
-                               <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Kans (W)</th>
-                               <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Effect (E)</th>
-                               <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Risicogetal (R)</th>
-                               <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Prioriteit</th>
+                               <th className="px-4 py-3 text-left text-xs font-bold text-gray-700 uppercase">Risico</th>
+                               <th className="px-4 py-3 text-left text-xs font-bold text-gray-700 uppercase">Categorie</th>
+                               <th className="px-4 py-3 text-left text-xs font-bold text-gray-700 uppercase">Blootstelling (B)</th>
+                               <th className="px-4 py-3 text-left text-xs font-bold text-gray-700 uppercase">Kans (W)</th>
+                               <th className="px-4 py-3 text-left text-xs font-bold text-gray-700 uppercase">Effect (E)</th>
+                               <th className="px-4 py-3 text-left text-xs font-bold text-gray-700 uppercase">Risicogetal (R)</th>
+                               <th className="px-4 py-3 text-left text-xs font-bold text-gray-700 uppercase">Prioriteit</th>
                              </tr>
                            </thead>
                            <tbody className="bg-white divide-y divide-gray-200">
@@ -747,17 +1573,11 @@ const CustomerDetailView = ({
                                ?.map((item, idx) => {
                                  const risico = item.risico || organisatieProfiel.risicos.find(r => r.id === item.risicoId);
                                  if (!risico) return null;
-                                 const blootstelling = item.blootstelling || risico.blootstelling || 3;
-                                 // Gebruik opgeslagen risicogetal als basis, pas aan met blootstelling van proces/functie
-                                 const basisBlootstelling = risico.blootstelling || 3;
-                                 const basisRisicogetal = risico.risicogetal || (basisBlootstelling * convertKansToFineKinney(risico.kans) * convertEffectToFineKinney(risico.effect));
-                                 // Als basisBlootstelling 0 is, gebruik directe berekening
-                                 const risicogetal = basisBlootstelling > 0 
-                                   ? (blootstelling / basisBlootstelling) * basisRisicogetal
-                                   : blootstelling * convertKansToFineKinney(risico.kans) * convertEffectToFineKinney(risico.effect);
-                                 const prioriteitNiveau = risicogetal >= 400 ? 1 : risicogetal >= 200 ? 2 : risicogetal >= 100 ? 3 : risicogetal >= 50 ? 4 : 5;
+                                 const blootstelling = item.blootstelling || 3;
                                  const kans = convertKansToFineKinney(risico.kans);
                                  const effect = convertEffectToFineKinney(risico.effect);
+                                 const risicogetal = blootstelling * kans * effect;
+                                 const prioriteitNiveau = risicogetal >= 400 ? 1 : risicogetal >= 200 ? 2 : risicogetal >= 100 ? 3 : risicogetal >= 50 ? 4 : 5;
                                  return { item, risico, blootstelling, kans, effect, risicogetal, prioriteitNiveau, idx };
                                })
                                .filter(Boolean)
@@ -766,27 +1586,27 @@ const CustomerDetailView = ({
                                  if (!data) return null;
                                  const { risico, blootstelling, kans, effect, risicogetal, prioriteitNiveau } = data;
                                  const prioriteitLabels = ['Zeer hoog', 'Hoog', 'Middel', 'Laag', 'Zeer laag'];
-                                 const prioriteitColors = ['bg-red-100 text-red-700', 'bg-orange-100 text-orange-700', 'bg-yellow-100 text-yellow-700', 'bg-blue-100 text-blue-700', 'bg-green-100 text-green-700'];
+                                 const prioriteitColors = ['bg-red-100 text-red-700 border-red-300', 'bg-orange-100 text-orange-700 border-orange-300', 'bg-yellow-100 text-yellow-700 border-yellow-300', 'bg-blue-100 text-blue-700 border-blue-300', 'bg-green-100 text-green-700 border-green-300'];
                                  const categorieColors = {
-                                   'fysiek': 'bg-blue-100 text-blue-700',
-                                   'psychisch': 'bg-purple-100 text-purple-700',
-                                   'overige': 'bg-gray-100 text-gray-700'
+                                   'fysiek': 'bg-blue-50 text-blue-700',
+                                   'psychisch': 'bg-purple-50 text-purple-700',
+                                   'overige': 'bg-gray-50 text-gray-700'
                                  };
                                  
                                  return (
-                                   <tr key={data.idx}>
-                                     <td className="px-4 py-3 text-sm text-gray-900">{risico.naam}</td>
+                                   <tr key={data.idx} className="hover:bg-gray-50 transition-colors">
+                                     <td className="px-4 py-3 text-sm font-medium text-gray-900">{risico.naam}</td>
                                      <td className="px-4 py-3">
                                        <span className={`px-2 py-1 rounded text-xs font-medium ${categorieColors[risico.categorie] || categorieColors.overige}`}>
                                          {risico.categorie}
                                        </span>
                                      </td>
-                                     <td className="px-4 py-3 text-sm text-gray-900">{blootstelling}</td>
-                                     <td className="px-4 py-3 text-sm text-gray-900">{kans}</td>
-                                     <td className="px-4 py-3 text-sm text-gray-900">{effect}</td>
-                                     <td className="px-4 py-3 text-sm font-bold text-gray-900">{risicogetal}</td>
+                                     <td className="px-4 py-3 text-sm text-gray-700 font-medium">{blootstelling}</td>
+                                     <td className="px-4 py-3 text-sm text-gray-700 font-medium">{kans}</td>
+                                     <td className="px-4 py-3 text-sm text-gray-700 font-medium">{effect}</td>
+                                     <td className="px-4 py-3 text-sm font-bold text-richting-orange">{risicogetal}</td>
                                      <td className="px-4 py-3">
-                                       <span className={`px-2 py-1 rounded text-xs font-bold ${prioriteitColors[prioriteitNiveau - 1]}`}>
+                                       <span className={`px-3 py-1 rounded-lg text-xs font-bold border-2 ${prioriteitColors[prioriteitNiveau - 1]}`}>
                                          {prioriteitNiveau}. {prioriteitLabels[prioriteitNiveau - 1]}
                                        </span>
                                      </td>
@@ -794,22 +1614,18 @@ const CustomerDetailView = ({
                                  );
                                })}
                            </tbody>
-                           <tfoot className="bg-gray-50">
+                           <tfoot className="bg-gradient-to-r from-gray-100 to-gray-50">
                              <tr>
-                               <td colSpan={6} className="px-4 py-3 text-right text-sm font-bold text-gray-900">Totaal:</td>
-                               <td className="px-4 py-3 text-sm font-bold text-gray-900">
+                               <td colSpan={6} className="px-4 py-3 text-right text-sm font-bold text-gray-900">Totaal Risicogetal:</td>
+                               <td className="px-4 py-3 text-sm font-bold text-richting-orange text-lg">
                                  {selectedProces.risicos
                                    ?.map(item => {
                                      const risico = item.risico || organisatieProfiel.risicos.find(r => r.id === item.risicoId);
                                      if (!risico) return 0;
-                                     const blootstelling = item.blootstelling || risico.blootstelling || 3;
-                                     // Gebruik opgeslagen risicogetal als basis, pas aan met blootstelling van proces/functie
-                                     const basisBlootstelling = risico.blootstelling || 3;
-                                     const basisRisicogetal = risico.risicogetal || (basisBlootstelling * convertKansToFineKinney(risico.kans) * convertEffectToFineKinney(risico.effect));
-                                     // Als basisBlootstelling 0 is, gebruik directe berekening
-                                     return basisBlootstelling > 0 
-                                       ? (blootstelling / basisBlootstelling) * basisRisicogetal
-                                       : blootstelling * convertKansToFineKinney(risico.kans) * convertEffectToFineKinney(risico.effect);
+                                     const blootstelling = item.blootstelling || 3;
+                                     const kans = convertKansToFineKinney(risico.kans);
+                                     const effect = convertEffectToFineKinney(risico.effect);
+                                     return blootstelling * kans * effect;
                                    })
                                    .reduce((sum, val) => sum + val, 0) || 0}
                                </td>
@@ -821,32 +1637,54 @@ const CustomerDetailView = ({
                    )}
                    {selectedFunctie && (
                      <>
-                       <p className="text-sm text-gray-600 mb-4">{selectedFunctie.beschrijving}</p>
-                       <h4 className="font-bold text-slate-900 mb-3">Functiebelasting</h4>
-                       <div className="mb-4">
-                         <div className="flex gap-4">
-                           <div>
-                             <span className="text-xs text-gray-500">Fysiek</span>
-                             <p className="text-2xl font-bold text-blue-600">{selectedFunctie.fysiek || 0}/5</p>
+                       <div className="bg-purple-50 border-l-4 border-purple-500 p-4 rounded mb-6">
+                         <p className="text-sm text-gray-700 leading-relaxed">{selectedFunctie.beschrijving}</p>
+                       </div>
+                       <h4 className="font-bold text-slate-900 mb-4 text-lg flex items-center gap-2">
+                         <span>📊</span> Functiebelasting
+                       </h4>
+                       <div className="mb-6 grid grid-cols-2 gap-4">
+                         <div className="bg-blue-50 border-2 border-blue-200 rounded-lg p-4">
+                           <span className="text-xs text-gray-600 font-medium block mb-2">💪 Fysieke Belasting</span>
+                           <div className="flex items-center gap-3">
+                             <div className="flex gap-1">
+                               {[1, 2, 3, 4, 5].map(i => (
+                                 <div key={i} className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold ${i <= (selectedFunctie.fysiek || 0) ? 'bg-blue-500 text-white' : 'bg-gray-200 text-gray-400'}`}>
+                                   {i}
+                                 </div>
+                               ))}
+                             </div>
+                             <p className="text-3xl font-bold text-blue-600">{selectedFunctie.fysiek || 0}/5</p>
                            </div>
-                           <div>
-                             <span className="text-xs text-gray-500">Psychisch</span>
-                             <p className="text-2xl font-bold text-purple-600">{selectedFunctie.psychisch || 0}/5</p>
+                         </div>
+                         <div className="bg-purple-50 border-2 border-purple-200 rounded-lg p-4">
+                           <span className="text-xs text-gray-600 font-medium block mb-2">🧠 Psychische Belasting</span>
+                           <div className="flex items-center gap-3">
+                             <div className="flex gap-1">
+                               {[1, 2, 3, 4, 5].map(i => (
+                                 <div key={i} className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold ${i <= (selectedFunctie.psychisch || 0) ? 'bg-purple-500 text-white' : 'bg-gray-200 text-gray-400'}`}>
+                                   {i}
+                                 </div>
+                               ))}
+                             </div>
+                             <p className="text-3xl font-bold text-purple-600">{selectedFunctie.psychisch || 0}/5</p>
                            </div>
                          </div>
                        </div>
-                       <h4 className="font-bold text-slate-900 mb-3">Risico's ({selectedFunctie.risicos?.length || 0})</h4>
-                       <div className="overflow-x-auto">
+                       <h4 className="font-bold text-slate-900 mb-4 text-lg flex items-center gap-2">
+                         <span>⚠️</span> Risico's ({selectedFunctie.risicos?.length || 0})
+                       </h4>
+                       <div className="overflow-x-auto border border-gray-200 rounded-lg">
                          <table className="min-w-full divide-y divide-gray-200">
-                           <thead className="bg-gray-50">
+                           <thead className="bg-gradient-to-r from-gray-100 to-gray-50">
                              <tr>
-                               <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Risico</th>
-                               <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Categorie</th>
-                               <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Blootstelling (B)</th>
-                               <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Kans (W)</th>
-                               <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Effect (E)</th>
-                               <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Risicogetal (R)</th>
-                               <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Prioriteit</th>
+                               <th className="px-4 py-3 text-left text-xs font-bold text-gray-700 uppercase">Risico</th>
+                               <th className="px-4 py-3 text-left text-xs font-bold text-gray-700 uppercase">Categorie</th>
+                               <th className="px-4 py-3 text-left text-xs font-bold text-gray-700 uppercase">Blootstelling (B)</th>
+                               <th className="px-4 py-3 text-left text-xs font-bold text-gray-700 uppercase">Kans (W)</th>
+                               <th className="px-4 py-3 text-left text-xs font-bold text-gray-700 uppercase">Effect (E)</th>
+                               <th className="px-4 py-3 text-left text-xs font-bold text-gray-700 uppercase">Risicogetal (R)</th>
+                               <th className="px-4 py-3 text-left text-xs font-bold text-gray-700 uppercase">Prioriteit</th>
                              </tr>
                            </thead>
                            <tbody className="bg-white divide-y divide-gray-200">
@@ -854,17 +1692,11 @@ const CustomerDetailView = ({
                                ?.map((item, idx) => {
                                  const risico = item.risico || organisatieProfiel.risicos.find(r => r.id === item.risicoId);
                                  if (!risico) return null;
-                                 const blootstelling = item.blootstelling || risico.blootstelling || 3;
-                                 // Gebruik opgeslagen risicogetal als basis, pas aan met blootstelling van proces/functie
-                                 const basisBlootstelling = risico.blootstelling || 3;
-                                 const basisRisicogetal = risico.risicogetal || (basisBlootstelling * convertKansToFineKinney(risico.kans) * convertEffectToFineKinney(risico.effect));
-                                 // Als basisBlootstelling 0 is, gebruik directe berekening
-                                 const risicogetal = basisBlootstelling > 0 
-                                   ? (blootstelling / basisBlootstelling) * basisRisicogetal
-                                   : blootstelling * convertKansToFineKinney(risico.kans) * convertEffectToFineKinney(risico.effect);
-                                 const prioriteitNiveau = risicogetal >= 400 ? 1 : risicogetal >= 200 ? 2 : risicogetal >= 100 ? 3 : risicogetal >= 50 ? 4 : 5;
+                                 const blootstelling = item.blootstelling || 3;
                                  const kans = convertKansToFineKinney(risico.kans);
                                  const effect = convertEffectToFineKinney(risico.effect);
+                                 const risicogetal = blootstelling * kans * effect;
+                                 const prioriteitNiveau = risicogetal >= 400 ? 1 : risicogetal >= 200 ? 2 : risicogetal >= 100 ? 3 : risicogetal >= 50 ? 4 : 5;
                                  return { item, risico, blootstelling, kans, effect, risicogetal, prioriteitNiveau, idx };
                                })
                                .filter(Boolean)
@@ -881,19 +1713,19 @@ const CustomerDetailView = ({
                                  };
                                  
                                  return (
-                                   <tr key={data.idx}>
-                                     <td className="px-4 py-3 text-sm text-gray-900">{risico.naam}</td>
+                                   <tr key={data.idx} className="hover:bg-gray-50 transition-colors">
+                                     <td className="px-4 py-3 text-sm font-medium text-gray-900">{risico.naam}</td>
                                      <td className="px-4 py-3">
                                        <span className={`px-2 py-1 rounded text-xs font-medium ${categorieColors[risico.categorie] || categorieColors.overige}`}>
                                          {risico.categorie}
                                        </span>
                                      </td>
-                                     <td className="px-4 py-3 text-sm text-gray-900">{blootstelling}</td>
-                                     <td className="px-4 py-3 text-sm text-gray-900">{kans}</td>
-                                     <td className="px-4 py-3 text-sm text-gray-900">{effect}</td>
-                                     <td className="px-4 py-3 text-sm font-bold text-gray-900">{risicogetal}</td>
+                                     <td className="px-4 py-3 text-sm text-gray-700 font-medium">{blootstelling}</td>
+                                     <td className="px-4 py-3 text-sm text-gray-700 font-medium">{kans}</td>
+                                     <td className="px-4 py-3 text-sm text-gray-700 font-medium">{effect}</td>
+                                     <td className="px-4 py-3 text-sm font-bold text-richting-orange">{risicogetal}</td>
                                      <td className="px-4 py-3">
-                                       <span className={`px-2 py-1 rounded text-xs font-bold ${prioriteitColors[prioriteitNiveau - 1]}`}>
+                                       <span className={`px-3 py-1 rounded-lg text-xs font-bold border-2 ${prioriteitColors[prioriteitNiveau - 1]}`}>
                                          {prioriteitNiveau}. {prioriteitLabels[prioriteitNiveau - 1]}
                                        </span>
                                      </td>
@@ -901,22 +1733,18 @@ const CustomerDetailView = ({
                                  );
                                })}
                            </tbody>
-                           <tfoot className="bg-gray-50">
+                           <tfoot className="bg-gradient-to-r from-gray-100 to-gray-50">
                              <tr>
-                               <td colSpan={6} className="px-4 py-3 text-right text-sm font-bold text-gray-900">Totaal:</td>
-                               <td className="px-4 py-3 text-sm font-bold text-gray-900">
+                               <td colSpan={6} className="px-4 py-3 text-right text-sm font-bold text-gray-900">Totaal Risicogetal:</td>
+                               <td className="px-4 py-3 text-sm font-bold text-richting-orange text-lg">
                                  {selectedFunctie.risicos
                                    ?.map(item => {
                                      const risico = item.risico || organisatieProfiel.risicos.find(r => r.id === item.risicoId);
                                      if (!risico) return 0;
-                                     const blootstelling = item.blootstelling || risico.blootstelling || 3;
-                                     // Gebruik opgeslagen risicogetal als basis, pas aan met blootstelling van proces/functie
-                                     const basisBlootstelling = risico.blootstelling || 3;
-                                     const basisRisicogetal = risico.risicogetal || (basisBlootstelling * convertKansToFineKinney(risico.kans) * convertEffectToFineKinney(risico.effect));
-                                     // Als basisBlootstelling 0 is, gebruik directe berekening
-                                     return basisBlootstelling > 0 
-                                       ? (blootstelling / basisBlootstelling) * basisRisicogetal
-                                       : blootstelling * convertKansToFineKinney(risico.kans) * convertEffectToFineKinney(risico.effect);
+                                     const blootstelling = item.blootstelling || 3;
+                                     const kans = convertKansToFineKinney(risico.kans);
+                                     const effect = convertEffectToFineKinney(risico.effect);
+                                     return blootstelling * kans * effect;
                                    })
                                    .reduce((sum, val) => sum + val, 0) || 0}
                                </td>
@@ -930,8 +1758,9 @@ const CustomerDetailView = ({
                </div>
              </div>
            )}
-         </div>
-       )}
+           </>
+         )}
+       </div>
 
        {/* DOCUMENTS SECTION */}
        <div className="pt-8 border-t border-gray-200">
@@ -972,16 +1801,19 @@ const CustomersView = ({ user, onOpenDoc }: { user: User, onOpenDoc: (d: Documen
 
   // New Customer Form State
   const [newName, setNewName] = useState('');
-  const [newIndustry, setNewIndustry] = useState('');
   const [newWebsite, setNewWebsite] = useState('');
-  const [newLogoUrl, setNewLogoUrl] = useState(''); // NEW STATE
-  const [assignedIds, setAssignedIds] = useState<string[]>([user.id]);
+  
+  // Website Search State
+  const [isSearchingWebsite, setIsSearchingWebsite] = useState(false);
+  const [websiteResults, setWebsiteResults] = useState<Array<{url: string, title: string, snippet: string, confidence: string}>>([]);
+  const [selectedWebsite, setSelectedWebsite] = useState<string>('');
+  const [hasSearched, setHasSearched] = useState(false);
 
   useEffect(() => {
     const fetchData = async () => {
       setLoading(true);
       const custs = await customerService.getCustomersForUser(user.id, user.role);
-      const users = await customerService.getAllUsers();
+      const users = await authService.getAllUsers();
       setCustomers(custs);
       setAllUsers(users);
       setLoading(false);
@@ -989,28 +1821,105 @@ const CustomersView = ({ user, onOpenDoc }: { user: User, onOpenDoc: (d: Documen
     fetchData();
   }, [user]);
 
+  const searchWebsite = useCallback(async (companyName: string) => {
+    if (!companyName.trim()) {
+      return;
+    }
+
+    setIsSearchingWebsite(true);
+    setWebsiteResults([]);
+    setSelectedWebsite('');
+    setHasSearched(false);
+
+    try {
+      // Call Firebase Function to search for website
+      const functionsUrl = 'https://europe-west4-richting-sales-d764a.cloudfunctions.net/searchCompanyWebsite';
+      const response = await fetch(functionsUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ companyName })
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const data = await response.json();
+      const websites = data.websites || [];
+      
+      setWebsiteResults(websites);
+      setHasSearched(true);
+      
+      // Auto-select best match (first result)
+      if (websites.length > 0) {
+        setSelectedWebsite(websites[0].url);
+        setNewWebsite(websites[0].url.replace(/^https?:\/\//, ''));
+      }
+    } catch (error) {
+      console.error("Error searching website:", error);
+      setHasSearched(true);
+      setWebsiteResults([]);
+    } finally {
+      setIsSearchingWebsite(false);
+    }
+  }, []);
+
+  // Auto-search when name changes (with debounce)
+  useEffect(() => {
+    if (!newName.trim() || !showAddModal) {
+      setWebsiteResults([]);
+      setSelectedWebsite('');
+      setNewWebsite('');
+      setHasSearched(false);
+      return;
+    }
+
+    const timeoutId = setTimeout(() => {
+      searchWebsite(newName);
+    }, 1000); // Wait 1 second after user stops typing
+
+    return () => clearTimeout(timeoutId);
+  }, [newName, showAddModal, searchWebsite]);
+
   const handleAddCustomer = async () => {
-    if (!newName) return;
+    if (!newName) {
+      alert("Voer een bedrijfsnaam in");
+      return;
+    }
     
-    // AUTOMATICALLY ENSURE URLS HAVE HTTPS
+    if (!selectedWebsite && !newWebsite) {
+      alert("Selecteer een website of voer handmatig een website in");
+      return;
+    }
+    
+    // Use selected website or manually entered website
+    const websiteToUse = selectedWebsite || newWebsite;
+    
     const newCustomer: Customer = {
       id: `cust_${Date.now()}`,
       name: newName,
-      industry: newIndustry,
-      website: ensureUrl(newWebsite), // FIX: Auto-prefix https://
-      logoUrl: ensureUrl(newLogoUrl), // FIX: Auto-prefix https://
-      status: 'active',
-      assignedUserIds: assignedIds,
-      createdAt: new Date().toISOString()
+      industry: '', // Empty by default
+      website: websiteToUse ? ensureUrl(websiteToUse) : undefined,
+      logoUrl: undefined,
+      status: 'prospect', // Start as prospect
+      assignedUserIds: [user.id], // Only current user by default
+      createdAt: new Date().toISOString(),
+      employeeCount: undefined,
+      hasRIE: undefined
     };
 
     await customerService.addCustomer(newCustomer);
     setCustomers(prev => [...prev, newCustomer]);
     setShowAddModal(false);
+    
+    // Reset all form state
     setNewName('');
-    setNewIndustry('');
     setNewWebsite('');
-    setNewLogoUrl('');
+    setWebsiteResults([]);
+    setSelectedWebsite('');
+    setHasSearched(false);
   };
 
   const toggleUserAssignment = (userId: string) => {
@@ -1142,9 +2051,9 @@ const CustomersView = ({ user, onOpenDoc }: { user: User, onOpenDoc: (d: Documen
              return (
               <div key={cust.id} onClick={() => setSelectedCustomer(cust)} className={`bg-white rounded-xl shadow-sm border transition-all cursor-pointer group relative p-6 hover:shadow-md ${isSelected ? 'border-richting-orange ring-1 ring-richting-orange' : 'border-gray-200'} ${cust.status === 'churned' || cust.status === 'rejected' ? 'opacity-60 grayscale' : ''}`}>
                 
-                {/* SELECTION CHECKBOX */}
+                {/* SELECTION CHECKBOX - rechtsboven */}
                 <div 
-                  className="absolute top-3 right-3 z-10 p-2"
+                  className="absolute top-4 right-4 z-10"
                   onClick={(e) => toggleCustomerSelection(cust.id, e)}
                 >
                    <div className={`w-5 h-5 rounded border flex items-center justify-center transition-colors ${isSelected ? 'bg-richting-orange border-richting-orange' : 'bg-white border-gray-300 group-hover:border-gray-400'}`}>
@@ -1152,34 +2061,40 @@ const CustomersView = ({ user, onOpenDoc }: { user: User, onOpenDoc: (d: Documen
                    </div>
                 </div>
 
+                {/* Logo linksboven en Status badge rechtsboven */}
                 <div className="flex justify-between items-start mb-4">
-                  {/* LOGO OR BLANK */}
-                  <div className="w-12 h-12 rounded-lg bg-white border border-gray-100 flex items-center justify-center overflow-hidden">
+                  {/* LOGO - linksboven */}
+                  <div className="w-14 h-14 rounded-lg bg-white border border-gray-100 flex items-center justify-center overflow-hidden flex-shrink-0">
                     {logoSrc ? (
-                        <img src={logoSrc} alt={cust.name} className="w-10 h-10 object-contain" />
+                        <img src={logoSrc} alt={cust.name} className="w-full h-full object-contain p-1" />
                     ) : (
                         <div className="w-full h-full bg-gray-50"></div>
                     )}
                   </div>
-                  <span className={`px-2 py-1 rounded-full text-xs font-bold uppercase ${cust.status === 'active' ? 'bg-green-100 text-green-700' : cust.status === 'prospect' ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-600'}`}>
-                    {getStatusLabel(cust.status)}
-                  </span>
-                </div>
-                <h3 className="text-lg font-bold text-slate-900 mb-1 group-hover:text-richting-orange">{cust.name}</h3>
-                <p className="text-sm text-gray-500 mb-6">{cust.industry || 'Geen branche opgegeven'}</p>
-                
-                <div className="border-t border-gray-100 pt-4 flex items-center justify-between">
-                  <div className="flex -space-x-2">
-                    {/* Show avatars of assigned users with safety check */}
-                    {allUsers.filter(u => assignedUsers.includes(u.id)).slice(0, 3).map(u => (
-                      <img key={u.id} src={u.avatarUrl} alt={u.name} className="w-8 h-8 rounded-full border-2 border-white bg-gray-200" title={u.name} />
-                    ))}
-                    {assignedUsers.length > 3 && (
-                      <div className="w-8 h-8 rounded-full border-2 border-white bg-gray-100 flex items-center justify-center text-xs font-bold text-gray-500">+{assignedUsers.length - 3}</div>
-                    )}
+                  
+                  {/* STATUS BADGE - rechtsboven (onder checkbox) */}
+                  <div className="flex flex-col items-end gap-2">
+                    <span className={`px-2.5 py-1 rounded text-xs font-bold uppercase ${cust.status === 'active' ? 'bg-green-100 text-green-700' : cust.status === 'prospect' ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-600'}`}>
+                      {getStatusLabel(cust.status)}
+                    </span>
                   </div>
-                  <span className="text-xs text-gray-400">Bekijk Dossier →</span>
                 </div>
+
+                {/* Bedrijfsnaam */}
+                <h3 className="text-lg font-bold text-slate-900 mb-2 group-hover:text-richting-orange">{cust.name}</h3>
+                
+                {/* Aantal medewerkers */}
+                {cust.employeeCount && (
+                  <p className="text-sm text-gray-600 mb-2">
+                    {cust.employeeCount.toLocaleString('nl-NL')} medewerkers
+                  </p>
+                )}
+                
+                {/* Extra info zoals "Geen RIE" */}
+                {cust.hasRIE === false && (
+                  <p className="text-xs text-gray-500 mb-3">X Geen RIE</p>
+                )}
+                
               </div>
             );
           })}
@@ -1192,78 +2107,128 @@ const CustomersView = ({ user, onOpenDoc }: { user: User, onOpenDoc: (d: Documen
           <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg overflow-hidden">
             <div className="bg-gray-50 px-6 py-4 border-b border-gray-200 flex justify-between items-center">
                <h3 className="font-bold text-slate-800">Nieuwe Klant Aanmaken</h3>
-               <button onClick={() => setShowAddModal(false)} className="text-gray-400 hover:text-gray-600">✕</button>
+               <button 
+                 onClick={() => {
+                   setShowAddModal(false);
+                   // Reset all form state
+                   setNewName('');
+                   setNewWebsite('');
+                   setWebsiteResults([]);
+                   setSelectedWebsite('');
+                   setHasSearched(false);
+                 }} 
+                 className="text-gray-400 hover:text-gray-600"
+               >
+                 ✕
+               </button>
             </div>
             <div className="p-6 space-y-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Bedrijfsnaam</label>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Bedrijfsnaam *</label>
                 <input 
                   type="text" 
                   className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-richting-orange focus:border-richting-orange"
                   placeholder="Bijv. Jansen Bouw B.V."
                   value={newName}
                   onChange={e => setNewName(e.target.value)}
+                  autoFocus
                 />
+                {isSearchingWebsite && (
+                  <p className="text-xs text-gray-500 mt-1 flex items-center gap-1">
+                    <span className="animate-spin">⏳</span> Zoeken naar website...
+                  </p>
+                )}
               </div>
-              <div className="grid grid-cols-2 gap-4">
+
+              {/* Website Search Results */}
+              {hasSearched && websiteResults.length > 0 && (
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Branche</label>
-                  <input 
-                    type="text" 
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-richting-orange focus:border-richting-orange"
-                    placeholder="Bijv. Bouw"
-                    value={newIndustry}
-                    onChange={e => setNewIndustry(e.target.value)}
-                  />
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Website (Best Match op 1) *</label>
+                  <div className="space-y-2 max-h-60 overflow-y-auto">
+                    {websiteResults.map((result, idx) => (
+                      <div
+                        key={idx}
+                        onClick={() => {
+                          setSelectedWebsite(result.url);
+                          setNewWebsite(result.url.replace(/^https?:\/\//, ''));
+                        }}
+                        className={`p-3 border-2 rounded-lg cursor-pointer transition-all ${
+                          selectedWebsite === result.url
+                            ? 'border-richting-orange bg-orange-50'
+                            : 'border-gray-200 bg-white hover:border-gray-300'
+                        }`}
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="flex-1">
+                            {idx === 0 && (
+                              <span className="inline-block px-2 py-0.5 bg-green-100 text-green-700 rounded text-xs font-bold mb-1">
+                                ✓ Best Match
+                              </span>
+                            )}
+                            <div className="flex items-center gap-2 mt-1">
+                              <span className={`px-2 py-0.5 rounded text-xs font-bold ${
+                                result.confidence === 'high' ? 'bg-green-100 text-green-700' :
+                                result.confidence === 'medium' ? 'bg-yellow-100 text-yellow-700' :
+                                'bg-gray-100 text-gray-600'
+                              }`}>
+                                {result.confidence}
+                              </span>
+                              <a 
+                                href={result.url} 
+                                target="_blank" 
+                                rel="noreferrer"
+                                onClick={e => e.stopPropagation()}
+                                className="text-richting-orange hover:underline text-sm font-medium flex items-center gap-1"
+                              >
+                                {result.url} <ExternalLinkIcon />
+                              </a>
+                            </div>
+                            {result.title && (
+                              <p className="text-sm font-semibold text-slate-900 mt-1">{result.title}</p>
+                            )}
+                            {result.snippet && (
+                              <p className="text-xs text-gray-600 mt-1 line-clamp-2">{result.snippet}</p>
+                            )}
+                          </div>
+                          <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${
+                            selectedWebsite === result.url
+                              ? 'border-richting-orange bg-richting-orange'
+                              : 'border-gray-300'
+                          }`}>
+                            {selectedWebsite === result.url && (
+                              <span className="text-white text-xs">✓</span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
                 </div>
+              )}
+
+              {hasSearched && websiteResults.length === 0 && (
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Website</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Website *</label>
+                  <div className="border border-yellow-200 rounded-lg p-3 bg-yellow-50 mb-2">
+                    <p className="text-sm text-gray-700">Geen websites gevonden. Voer handmatig een website in.</p>
+                  </div>
                   <input 
                     type="text" 
                     className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-richting-orange focus:border-richting-orange"
                     placeholder="richting.nl (zonder https://)"
                     value={newWebsite}
-                    onChange={e => setNewWebsite(e.target.value)}
+                    onChange={e => {
+                      setNewWebsite(e.target.value);
+                      setSelectedWebsite('');
+                    }}
                   />
                 </div>
-              </div>
-
-              {/* MANUAL LOGO URL INPUT */}
-              <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Logo URL (Optioneel)</label>
-                  <input 
-                    type="text" 
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-richting-orange focus:border-richting-orange"
-                    placeholder="Link naar afbeelding"
-                    value={newLogoUrl}
-                    onChange={e => setNewLogoUrl(e.target.value)}
-                  />
-                  <p className="text-xs text-gray-500 mt-1">Vul hier een link in als het automatische logo niet werkt.</p>
-              </div>
-              
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Team Toegang</label>
-                <div className="border border-gray-200 rounded-md max-h-40 overflow-y-auto divide-y divide-gray-100">
-                  {allUsers.map(u => (
-                    <div 
-                      key={u.id} 
-                      onClick={() => toggleUserAssignment(u.id)}
-                      className={`flex items-center gap-3 p-2 cursor-pointer hover:bg-gray-50 ${assignedIds.includes(u.id) ? 'bg-orange-50' : ''}`}
-                    >
-                      <div className={`w-4 h-4 rounded border flex items-center justify-center ${assignedIds.includes(u.id) ? 'bg-richting-orange border-richting-orange' : 'border-gray-300'}`}>
-                        {assignedIds.includes(u.id) && <span className="text-white text-xs">✓</span>}
-                      </div>
-                      <img src={u.avatarUrl} className="w-6 h-6 rounded-full" />
-                      <span className="text-sm text-gray-700">{u.name} {u.id === user.id && '(Jij)'}</span>
-                    </div>
-                  ))}
-                </div>
-                <p className="text-xs text-gray-500 mt-1">Geselecteerde collega's krijgen toegang tot dit dossier.</p>
-              </div>
+              )}
 
               <button 
                 onClick={handleAddCustomer}
-                className="w-full mt-4 bg-richting-orange text-white py-3 rounded-lg font-bold hover:bg-orange-600 transition-colors"
+                disabled={!newName || (!selectedWebsite && !newWebsite)}
+                className="w-full mt-4 bg-richting-orange text-white py-3 rounded-lg font-bold hover:bg-orange-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 Klant Aanmaken
               </button>
@@ -1744,6 +2709,1415 @@ const UploadView = ({ user, onUploadComplete }: { user: User, onUploadComplete: 
   );
 };
 
+// --- SETTINGS VIEW ---
+// --- REGIO VIEW ---
+const RegioView = ({ user }: { user: User }) => {
+  const [richtingLocaties, setRichtingLocaties] = useState<RichtingLocatie[]>([]);
+  const [customers, setCustomers] = useState<Customer[]>([]);
+  const [allLocations, setAllLocations] = useState<Location[]>([]);
+  const [selectedRegio, setSelectedRegio] = useState<string | null>(null);
+  const [selectedVestiging, setSelectedVestiging] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [isLinkingLocations, setIsLinkingLocations] = useState(false);
+
+  useEffect(() => {
+    const loadData = async () => {
+      setLoading(true);
+      try {
+        const [locaties, klanten] = await Promise.all([
+          richtingLocatiesService.getAllLocaties(),
+          customerService.getCustomersForUser(user.id, user.role)
+        ]);
+        setRichtingLocaties(locaties);
+        setCustomers(klanten);
+
+        // Haal alle klant locaties op
+        const allCustomerLocations: Location[] = [];
+        for (const customer of klanten) {
+          const locs = await customerService.getLocations(customer.id);
+          allCustomerLocations.push(...locs);
+        }
+        
+        // Koppel locaties zonder richtingLocatieId aan dichtstbijzijnde Richting locatie
+        const updatedLocations: Location[] = [];
+        for (const loc of allCustomerLocations) {
+          if (!loc.richtingLocatieId && loc.city) {
+            // Zoek op basis van stad naam
+            const matchingLocatie = locaties.find(rl => {
+              const cityLower = loc.city.toLowerCase();
+              const vestigingLower = rl.vestiging.toLowerCase();
+              const adresLower = rl.volledigAdres.toLowerCase();
+              
+              return cityLower.includes(vestigingLower) || 
+                     vestigingLower.includes(cityLower) ||
+                     adresLower.includes(cityLower) ||
+                     cityLower.includes(adresLower.split(',')[0].toLowerCase());
+            });
+            
+            if (matchingLocatie) {
+              const updatedLoc: Location = {
+                ...loc,
+                richtingLocatieId: matchingLocatie.id,
+                richtingLocatieNaam: matchingLocatie.vestiging
+              };
+              // Update in Firestore
+              await customerService.addLocation(updatedLoc);
+              updatedLocations.push(updatedLoc);
+            } else {
+              updatedLocations.push(loc);
+            }
+          } else {
+            updatedLocations.push(loc);
+          }
+        }
+        
+        setAllLocations(updatedLocations);
+      } catch (error) {
+        console.error("Error loading regio data:", error);
+      } finally {
+        setLoading(false);
+      }
+    };
+    loadData();
+  }, [user]);
+
+  // Groepeer Richting locaties per regio
+  const locatiesPerRegio = useMemo(() => {
+    const grouped: Record<string, RichtingLocatie[]> = {};
+    richtingLocaties.forEach(loc => {
+      if (!grouped[loc.regio]) {
+        grouped[loc.regio] = [];
+      }
+      grouped[loc.regio].push(loc);
+    });
+    return grouped;
+  }, [richtingLocaties]);
+
+  // Match klanten met regio's/vestigingen op basis van hun locaties
+  // Nu met locatie-specifieke medewerkersaantallen
+  const klantenPerRegio = useMemo(() => {
+    const grouped: Record<string, { customer: Customer, vestiging: string, location: Location }[]> = {};
+    
+    allLocations.forEach(loc => {
+      if (loc.richtingLocatieId) {
+        const richtingLoc = richtingLocaties.find(rl => rl.id === loc.richtingLocatieId);
+        if (richtingLoc) {
+          const customer = customers.find(c => c.id === loc.customerId);
+          if (customer) {
+            if (!grouped[richtingLoc.regio]) {
+              grouped[richtingLoc.regio] = [];
+            }
+            grouped[richtingLoc.regio].push({
+              customer,
+              vestiging: richtingLoc.vestiging,
+              location: loc
+            });
+          }
+        }
+      }
+    });
+    
+    return grouped;
+  }, [allLocations, richtingLocaties, customers]);
+
+  // Bereken medewerkers per regio (gebruik locatie-specifieke aantallen)
+  const medewerkersPerRegio = useMemo(() => {
+    const totals: Record<string, number> = {};
+    Object.keys(klantenPerRegio).forEach(regio => {
+      const total = klantenPerRegio[regio].reduce((sum, item) => {
+        // Gebruik locatie-specifiek aantal als beschikbaar
+        if (item.location.employeeCount !== undefined && item.location.employeeCount !== null) {
+          return sum + item.location.employeeCount;
+        }
+        // Als locatie geen aantal heeft, gebruik klant totaal (maar alleen één keer per klant per regio)
+        // Om dubbele telling te voorkomen, tellen we alleen de eerste locatie van een klant in een regio
+        const isFirstLocationForCustomer = klantenPerRegio[regio].findIndex(
+          i => i.customer.id === item.customer.id && i.location.id === item.location.id
+        ) === klantenPerRegio[regio].findIndex(i => i.customer.id === item.customer.id);
+        
+        if (isFirstLocationForCustomer) {
+          return sum + (item.customer.employeeCount || 0);
+        }
+        return sum;
+      }, 0);
+      totals[regio] = total;
+    });
+    return totals;
+  }, [klantenPerRegio]);
+
+  // Bereken medewerkers per vestiging (gebruik locatie-specifieke aantallen)
+  const medewerkersPerVestiging = useMemo(() => {
+    if (!selectedRegio) return {};
+    const totals: Record<string, number> = {};
+    klantenPerRegio[selectedRegio]?.forEach(item => {
+      if (!totals[item.vestiging]) {
+        totals[item.vestiging] = 0;
+      }
+      
+      // Gebruik locatie-specifiek aantal als beschikbaar
+      if (item.location.employeeCount !== undefined && item.location.employeeCount !== null) {
+        totals[item.vestiging] += item.location.employeeCount;
+      } else {
+        // Als locatie geen aantal heeft, gebruik klant totaal (maar alleen één keer per klant per vestiging)
+        const isFirstLocationForCustomer = klantenPerRegio[selectedRegio]?.findIndex(
+          i => i.customer.id === item.customer.id && 
+               i.vestiging === item.vestiging && 
+               i.location.id === item.location.id
+        ) === klantenPerRegio[selectedRegio]?.findIndex(
+          i => i.customer.id === item.customer.id && i.vestiging === item.vestiging
+        );
+        
+        if (isFirstLocationForCustomer) {
+          totals[item.vestiging] += (item.customer.employeeCount || 0);
+        }
+      }
+    });
+    return totals;
+  }, [selectedRegio, klantenPerRegio]);
+
+  // Filter klanten op basis van geselecteerde regio/vestiging
+  // Unieke klanten (om duplicaten te voorkomen)
+  const filteredKlanten = useMemo(() => {
+    if (!selectedRegio) return [];
+    let filtered = klantenPerRegio[selectedRegio] || [];
+    if (selectedVestiging) {
+      filtered = filtered.filter(item => item.vestiging === selectedVestiging);
+    }
+    // Unieke klanten op basis van customer ID
+    const uniqueCustomers = new Map<string, { customer: Customer, location: Location }>();
+    filtered.forEach(item => {
+      if (!uniqueCustomers.has(item.customer.id)) {
+        uniqueCustomers.set(item.customer.id, { customer: item.customer, location: item.location });
+      }
+    });
+    return Array.from(uniqueCustomers.values());
+  }, [selectedRegio, selectedVestiging, klantenPerRegio]);
+
+  // Pie chart data: Actieve klanten vs Prospects
+  const pieChartData = useMemo(() => {
+    const actief = customers.filter(c => c.status === 'active').length;
+    const prospect = customers.filter(c => c.status === 'prospect').length;
+    const totaal = actief + prospect;
+    
+    if (totaal === 0) {
+      return { actief: 0, prospect: 0, actiefPercentage: 0, prospectPercentage: 0 };
+    }
+    
+    return {
+      actief,
+      prospect,
+      actiefPercentage: (actief / totaal) * 100,
+      prospectPercentage: (prospect / totaal) * 100
+    };
+  }, [customers]);
+
+  const handleRelinkAllLocations = async () => {
+    setIsLinkingLocations(true);
+    try {
+      const updatedLocations: Location[] = [];
+      
+      for (const loc of allLocations) {
+        if (loc.city) {
+          // Zoek op basis van stad naam
+          const matchingLocatie = richtingLocaties.find(rl => {
+            const cityLower = loc.city.toLowerCase();
+            const vestigingLower = rl.vestiging.toLowerCase();
+            const adresLower = rl.volledigAdres.toLowerCase();
+            
+            return cityLower.includes(vestigingLower) || 
+                   vestigingLower.includes(cityLower) ||
+                   adresLower.includes(cityLower) ||
+                   cityLower.includes(adresLower.split(',')[0].toLowerCase());
+          });
+          
+          if (matchingLocatie) {
+            const updatedLoc: Location = {
+              ...loc,
+              richtingLocatieId: matchingLocatie.id,
+              richtingLocatieNaam: matchingLocatie.vestiging
+            };
+            // Update in Firestore
+            await customerService.addLocation(updatedLoc);
+            updatedLocations.push(updatedLoc);
+          } else {
+            updatedLocations.push(loc);
+          }
+        } else {
+          updatedLocations.push(loc);
+        }
+      }
+      
+      setAllLocations(updatedLocations);
+      alert(`✅ ${updatedLocations.filter(l => l.richtingLocatieId).length} locaties gekoppeld aan Richting vestigingen.`);
+    } catch (error) {
+      console.error("Error linking locations:", error);
+      alert("Fout bij koppelen van locaties. Probeer het opnieuw.");
+    } finally {
+      setIsLinkingLocations(false);
+    }
+  };
+
+  if (loading) {
+    return <div className="text-center py-10 text-gray-500">Laden...</div>;
+  }
+
+  const regioOrder = ['Noord', 'Oost', 'West', 'Zuid West', 'Zuid Oost', 'Midden'];
+  
+  // Debug info
+  console.log('RegioView Debug:', {
+    richtingLocaties: richtingLocaties.length,
+    customers: customers.length,
+    allLocations: allLocations.length,
+    locationsWithRichtingId: allLocations.filter(l => l.richtingLocatieId).length,
+    klantenPerRegio: Object.keys(klantenPerRegio).length,
+    locatiesPerRegio: Object.keys(locatiesPerRegio).length
+  });
+
+  return (
+    <div className="space-y-6">
+      <div className="flex justify-between items-center">
+        <h2 className="text-2xl font-bold text-slate-900">Regio & Sales Overzicht</h2>
+        {user.role === UserRole.ADMIN && (
+          <button
+            onClick={handleRelinkAllLocations}
+            disabled={isLinkingLocations}
+            className="bg-blue-500 text-white px-4 py-2 rounded-lg font-bold hover:bg-blue-600 disabled:opacity-50 transition-colors text-sm"
+          >
+            {isLinkingLocations ? '⏳ Koppelen...' : '🔗 Koppel Alle Locaties'}
+          </button>
+        )}
+      </div>
+
+      {/* Pie Chart: Actieve Klanten vs Prospects */}
+      <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+        <h3 className="text-lg font-bold text-slate-900 mb-4 flex items-center gap-2">
+          <span className="text-2xl">📊</span> Sales & Capaciteit Overzicht
+        </h3>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-8 items-center">
+          {/* Pie Chart */}
+          <div className="flex flex-col items-center">
+            <div className="relative w-64 h-64 mb-4">
+              <svg className="transform -rotate-90 w-64 h-64">
+                <circle
+                  cx="128"
+                  cy="128"
+                  r="100"
+                  fill="none"
+                  stroke="#e5e7eb"
+                  strokeWidth="40"
+                />
+                {pieChartData.actiefPercentage > 0 && (
+                  <circle
+                    cx="128"
+                    cy="128"
+                    r="100"
+                    fill="none"
+                    stroke="#f97316"
+                    strokeWidth="40"
+                    strokeDasharray={`${2 * Math.PI * 100}`}
+                    strokeDashoffset={`${2 * Math.PI * 100 * (1 - pieChartData.actiefPercentage / 100)}`}
+                    className="transition-all duration-500"
+                  />
+                )}
+                {pieChartData.prospectPercentage > 0 && (
+                  <circle
+                    cx="128"
+                    cy="128"
+                    r="100"
+                    fill="none"
+                    stroke="#3b82f6"
+                    strokeWidth="40"
+                    strokeDasharray={`${2 * Math.PI * 100}`}
+                    strokeDashoffset={`${2 * Math.PI * 100 * (1 - pieChartData.prospectPercentage / 100) - (2 * Math.PI * 100 * pieChartData.actiefPercentage / 100)}`}
+                    className="transition-all duration-500"
+                  />
+                )}
+              </svg>
+              <div className="absolute inset-0 flex items-center justify-center">
+                <div className="text-center">
+                  <p className="text-3xl font-bold text-slate-900">{pieChartData.actief + pieChartData.prospect}</p>
+                  <p className="text-sm text-gray-500">Totaal</p>
+                </div>
+              </div>
+            </div>
+            <div className="flex gap-6">
+              <div className="flex items-center gap-2">
+                <div className="w-4 h-4 rounded-full bg-richting-orange"></div>
+                <span className="text-sm text-gray-700">
+                  Actief: <span className="font-bold">{pieChartData.actief}</span> ({pieChartData.actiefPercentage.toFixed(1)}%)
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="w-4 h-4 rounded-full bg-blue-500"></div>
+                <span className="text-sm text-gray-700">
+                  Prospect: <span className="font-bold">{pieChartData.prospect}</span> ({pieChartData.prospectPercentage.toFixed(1)}%)
+                </span>
+              </div>
+            </div>
+          </div>
+
+          {/* Statistieken */}
+          <div className="space-y-4">
+            <div className="bg-orange-50 border-2 border-orange-200 rounded-lg p-4">
+              <p className="text-xs text-gray-600 mb-1">Actieve Klanten</p>
+              <p className="text-3xl font-bold text-richting-orange">{pieChartData.actief}</p>
+              <p className="text-xs text-gray-500 mt-1">Huidige capaciteit in gebruik</p>
+            </div>
+            <div className="bg-blue-50 border-2 border-blue-200 rounded-lg p-4">
+              <p className="text-xs text-gray-600 mb-1">Prospects</p>
+              <p className="text-3xl font-bold text-blue-600">{pieChartData.prospect}</p>
+              <p className="text-xs text-gray-500 mt-1">Potentiële nieuwe klanten</p>
+            </div>
+            <div className="bg-gray-50 border-2 border-gray-200 rounded-lg p-4">
+              <p className="text-xs text-gray-600 mb-1">Totaal Medewerkers</p>
+              <p className="text-3xl font-bold text-slate-900">
+                {(() => {
+                  // Bereken totaal op basis van locatie-specifieke aantallen waar beschikbaar
+                  const totalFromLocations = allLocations.reduce((sum, loc) => {
+                    if (loc.employeeCount !== undefined && loc.employeeCount !== null) {
+                      return sum + loc.employeeCount;
+                    }
+                    return sum;
+                  }, 0);
+                  
+                  // Voeg klanten toe die geen locaties met aantallen hebben
+                  const customersWithoutLocationCounts = customers.filter(c => {
+                    const hasLocationWithCount = allLocations.some(
+                      loc => loc.customerId === c.id && loc.employeeCount !== undefined && loc.employeeCount !== null
+                    );
+                    return !hasLocationWithCount;
+                  });
+                  
+                  const totalFromCustomers = customersWithoutLocationCounts.reduce(
+                    (sum, c) => sum + (c.employeeCount || 0), 0
+                  );
+                  
+                  return (totalFromLocations + totalFromCustomers).toLocaleString('nl-NL');
+                })()}
+              </p>
+              <p className="text-xs text-gray-500 mt-1">Gebaseerd op locatie-specifieke aantallen</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Regio Selectie */}
+      <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+        <h3 className="text-lg font-bold text-slate-900 mb-4 flex items-center gap-2">
+          <span className="text-2xl">🗺️</span> Selecteer Regio
+        </h3>
+        {richtingLocaties.length === 0 ? (
+          <div className="text-center py-8 text-gray-500">
+            <p className="mb-2">Geen Richting locaties gevonden.</p>
+            <p className="text-sm">Ga naar Instellingen → Data Beheer om Richting locaties te seeden.</p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+            {regioOrder.map(regio => {
+              const locatiesInRegio = locatiesPerRegio[regio] || [];
+              const klantenInRegio = klantenPerRegio[regio] || [];
+              const medewerkers = medewerkersPerRegio[regio] || 0;
+              const isSelected = selectedRegio === regio;
+              
+              return (
+                <button
+                  key={regio}
+                  onClick={() => {
+                    setSelectedRegio(isSelected ? null : regio);
+                    setSelectedVestiging(null);
+                  }}
+                  className={`p-4 rounded-lg border-2 transition-all text-left ${
+                    isSelected
+                      ? 'border-richting-orange bg-orange-50 shadow-md'
+                      : 'border-gray-200 bg-white hover:border-gray-300'
+                  }`}
+                >
+                  <p className="font-bold text-slate-900 mb-1">{regio}</p>
+                  <p className="text-xs text-gray-500 mb-2">{locatiesInRegio.length} vestiging{locatiesInRegio.length !== 1 ? 'en' : ''}</p>
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs text-gray-600">{klantenInRegio.length} klant{klantenInRegio.length !== 1 ? 'en' : ''}</span>
+                    <span className="text-xs font-bold text-richting-orange">
+                      {medewerkers.toLocaleString('nl-NL')} medew.
+                    </span>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* Vestiging Selectie (alleen als regio geselecteerd) */}
+      {selectedRegio && (
+        <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+          <h3 className="text-lg font-bold text-slate-900 mb-4 flex items-center gap-2">
+            <span className="text-2xl">📍</span> Vestigingen in {selectedRegio}
+          </h3>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {(locatiesPerRegio[selectedRegio] || []).map(vestiging => {
+              const klantenBijVestiging = (klantenPerRegio[selectedRegio] || [])
+                .filter(item => item.vestiging === vestiging.vestiging)
+                .map(item => item.customer);
+              const medewerkers = medewerkersPerVestiging[vestiging.vestiging] || 0;
+              const isSelected = selectedVestiging === vestiging.vestiging;
+              
+              return (
+                <button
+                  key={vestiging.id}
+                  onClick={() => setSelectedVestiging(isSelected ? null : vestiging.vestiging)}
+                  className={`p-4 rounded-lg border-2 transition-all text-left ${
+                    isSelected
+                      ? 'border-richting-orange bg-orange-50 shadow-md'
+                      : 'border-gray-200 bg-white hover:border-gray-300'
+                  }`}
+                >
+                  <p className="font-bold text-slate-900 mb-1">{vestiging.vestiging}</p>
+                  <p className="text-xs text-gray-500 mb-2 line-clamp-1">{vestiging.volledigAdres}</p>
+                  <div className="flex items-center justify-between mt-2">
+                    <span className="text-xs text-gray-600">{klantenBijVestiging.length} klant{klantenBijVestiging.length !== 1 ? 'en' : ''}</span>
+                    <span className="text-xs font-bold text-richting-orange">
+                      {medewerkers.toLocaleString('nl-NL')} medew.
+                    </span>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Klanten Overzicht (gefilterd op regio/vestiging) */}
+      {selectedRegio && (
+        <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+          <div className="flex justify-between items-center mb-4">
+            <h3 className="text-lg font-bold text-slate-900 flex items-center gap-2">
+              <span className="text-2xl">💼</span> Klanten
+              {selectedVestiging && ` - ${selectedVestiging}`}
+              {!selectedVestiging && ` in ${selectedRegio}`}
+            </h3>
+            <span className="text-sm text-gray-500">
+              {filteredKlanten.length} klant{filteredKlanten.length !== 1 ? 'en' : ''}
+            </span>
+          </div>
+          {filteredKlanten.length === 0 ? (
+            <p className="text-gray-500 text-center py-8">Geen klanten gevonden voor deze selectie.</p>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {filteredKlanten.map(({ customer, location }) => {
+                // Try multiple logo sources
+                const logoSrc = customer.logoUrl || getCompanyLogoUrl(customer.website) || (customer.website ? `https://wsrv.nl/?url=${ensureUrl(customer.website)}&w=128&output=png` : null);
+                const employeeCount = location?.employeeCount || customer.employeeCount;
+                return (
+                  <div
+                    key={customer.id}
+                    className="p-4 bg-gray-50 rounded-lg border border-gray-200 hover:border-richting-orange transition-colors cursor-pointer"
+                  >
+                    <div className="flex items-start gap-3 mb-3">
+                      <div className="w-16 h-16 rounded-lg bg-white border border-gray-100 flex items-center justify-center overflow-hidden flex-shrink-0 shadow-sm">
+                        {logoSrc ? (
+                          <img 
+                            src={logoSrc} 
+                            alt={customer.name} 
+                            className="w-full h-full object-contain p-1"
+                            onError={(e) => {
+                              // Fallback to icon if image fails to load
+                              const img = e.target as HTMLImageElement;
+                              img.style.display = 'none';
+                              const parent = img.parentElement;
+                              if (parent) {
+                                const existingFallback = parent.querySelector('.fallback-icon');
+                                if (!existingFallback) {
+                                  const fallback = document.createElement('div');
+                                  fallback.className = 'w-full h-full bg-gray-50 flex items-center justify-center fallback-icon';
+                                  fallback.innerHTML = '<span class="text-2xl text-gray-400">🏢</span>';
+                                  parent.appendChild(fallback);
+                                }
+                              }
+                            }}
+                          />
+                        ) : (
+                          <div className="w-full h-full bg-gray-50 flex items-center justify-center">
+                            <span className="text-2xl text-gray-400">🏢</span>
+                          </div>
+                        )}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="font-bold text-slate-900 text-sm mb-1">{customer.name}</p>
+                        <p className="text-xs text-gray-500 mb-1">{customer.industry}</p>
+                        {location && (
+                          <p className="text-xs text-gray-400 italic">{location.name}</p>
+                        )}
+                      </div>
+                      <span className={`px-2 py-0.5 rounded text-xs font-bold uppercase flex-shrink-0 ${
+                        customer.status === 'active' ? 'bg-green-100 text-green-700' : 
+                        customer.status === 'prospect' ? 'bg-blue-100 text-blue-700' : 
+                        'bg-gray-100 text-gray-600'
+                      }`}>
+                        {customer.status === 'active' ? 'Actief' : customer.status === 'prospect' ? 'Prospect' : customer.status}
+                      </span>
+                    </div>
+                    {employeeCount && (
+                      <div className="flex items-center gap-2 text-xs text-gray-600 mt-2 pt-2 border-t border-gray-200">
+                        <span className="font-bold text-richting-orange">{employeeCount.toLocaleString('nl-NL')}</span>
+                        <span>medewerkers{location?.employeeCount ? ` (${location.name})` : ''}</span>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
+const SettingsView = ({ user }: { user: User }) => {
+  const [activeTab, setActiveTab] = useState<'autorisatie' | 'promptbeheer' | 'databeheer' | 'typebeheer'>('autorisatie');
+  const [users, setUsers] = useState<User[]>([]);
+  const [prompts, setPrompts] = useState<Prompt[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [selectedPrompt, setSelectedPrompt] = useState<Prompt | null>(null);
+  const [promptContent, setPromptContent] = useState('');
+  const [promptName, setPromptName] = useState('');
+  const [promptType, setPromptType] = useState<string>('publiek_organisatie_profiel');
+  const [promptTypes, setPromptTypes] = useState<{type: string, label: string}[]>([]);
+  const [newTypeName, setNewTypeName] = useState('');
+  const [newTypeLabel, setNewTypeLabel] = useState('');
+  const [editingType, setEditingType] = useState<{type: string, label: string} | null>(null);
+  const [editingTypeLabel, setEditingTypeLabel] = useState('');
+  const [showPromptEditor, setShowPromptEditor] = useState(false);
+  const [uploadingFile, setUploadingFile] = useState(false);
+  const [seedingLocaties, setSeedingLocaties] = useState(false);
+  const [richtingLocaties, setRichtingLocaties] = useState<RichtingLocatie[]>([]);
+
+  useEffect(() => {
+    const loadData = async () => {
+      setLoading(true);
+      try {
+        const [usersData, promptsData, locatiesData, typesWithLabelsData] = await Promise.all([
+          authService.getAllUsers(),
+          promptService.getPrompts(),
+          richtingLocatiesService.getAllLocaties(),
+          promptService.getPromptTypesWithLabels()
+        ]);
+        setUsers(usersData);
+        setPrompts(promptsData);
+        setRichtingLocaties(locatiesData);
+        
+        // Log prompts for debugging
+        console.log('📋 Loaded prompts:', promptsData.length);
+        if (promptsData.length === 0) {
+          console.warn('⚠️ No prompts found. Check Firestore collection "prompts" in database "richting01"');
+        } else {
+          console.log('📋 Prompts:', promptsData.map(p => `${p.name || p.type} (${p.type}, v${p.versie || 1}, ${p.isActief ? 'actief' : 'inactief'})`).join(', '));
+        }
+        
+        // Use types with labels directly from service
+        setPromptTypes(typesWithLabelsData);
+      } catch (error) {
+        console.error("❌ Error loading settings data:", error);
+        // Show error to user
+        alert(`Fout bij laden van data: ${error instanceof Error ? error.message : 'Onbekende fout'}`);
+      } finally {
+        setLoading(false);
+      }
+    };
+    loadData();
+  }, []);
+
+  const handleSeedRichtingLocaties = async () => {
+    if (!window.confirm('Weet je zeker dat je de Richting locaties wilt seeden? Dit voegt 23 locaties toe aan Firestore.')) {
+      return;
+    }
+
+    setSeedingLocaties(true);
+    try {
+      await richtingLocatiesService.seedLocaties();
+      const updatedLocaties = await richtingLocatiesService.getAllLocaties();
+      setRichtingLocaties(updatedLocaties);
+      alert(`✅ Succesvol! ${updatedLocaties.length} Richting locaties zijn toegevoegd.`);
+    } catch (error: any) {
+      console.error("Error seeding richting locaties:", error);
+      if (error.message?.includes('already exists') || error.code === 'already-exists') {
+        alert('⚠️ Locaties bestaan al. Als je opnieuw wilt seeden, verwijder eerst de collection in Firebase Console.');
+      } else {
+        alert(`❌ Fout bij seeden: ${error.message || 'Onbekende fout'}`);
+      }
+    } finally {
+      setSeedingLocaties(false);
+    }
+  };
+
+  const handleRoleChange = async (userId: string, newRole: UserRole) => {
+    try {
+      await authService.updateUserRole(userId, newRole);
+      setUsers(prev => prev.map(u => u.id === userId ? { ...u, role: newRole } : u));
+      if (user.id === userId) {
+        window.location.reload(); // Reload if current user's role changed
+      }
+    } catch (error) {
+      console.error("Error updating user role:", error);
+      alert("Fout bij het bijwerken van de rol. Probeer het opnieuw.");
+    }
+  };
+
+  const handleSavePrompt = async () => {
+    if (!promptName || !promptContent) {
+      alert("Vul naam en inhoud in");
+      return;
+    }
+
+    try {
+      const promptData = {
+        name: promptName,
+        type: promptType,
+        promptTekst: promptContent,
+        versie: selectedPrompt?.versie || 1,
+        isActief: selectedPrompt?.isActief ?? false,
+        files: selectedPrompt?.files || []
+      };
+
+      await promptService.savePrompt(
+        selectedPrompt ? { ...promptData, id: selectedPrompt.id } : promptData,
+        user.id
+      );
+
+      const updatedPrompts = await promptService.getPrompts();
+      setPrompts(updatedPrompts);
+      setShowPromptEditor(false);
+      setSelectedPrompt(null);
+      setPromptName('');
+      setPromptContent('');
+    } catch (error) {
+      console.error("Error saving prompt:", error);
+      alert("Fout bij het opslaan van de prompt. Probeer het opnieuw.");
+    }
+  };
+
+  const handleActivatePrompt = async (promptId: string, type: string) => {
+    if (!window.confirm('Weet je zeker dat je deze prompt wilt activeren? Dit deactiveert alle andere prompts van dit type (maar andere types blijven actief).')) {
+      return;
+    }
+
+    try {
+      await promptService.activatePrompt(promptId, type);
+      const updatedPrompts = await promptService.getPrompts();
+      setPrompts(updatedPrompts);
+      // Update selected prompt if it's the one we activated
+      if (selectedPrompt && selectedPrompt.id === promptId) {
+        const updated = await promptService.getPrompt(promptId);
+        if (updated) setSelectedPrompt(updated);
+      }
+      alert('Prompt geactiveerd!');
+    } catch (error) {
+      console.error("Error activating prompt:", error);
+      alert("Fout bij het activeren van de prompt. Probeer het opnieuw.");
+    }
+  };
+
+  const handleDeletePrompt = async (promptId: string) => {
+    if (!window.confirm('Weet je zeker dat je deze prompt wilt verwijderen? Deze actie kan niet ongedaan worden gemaakt.')) {
+      return;
+    }
+
+    try {
+      await promptService.deletePrompt(promptId);
+      const updatedPrompts = await promptService.getPrompts();
+      setPrompts(updatedPrompts);
+      if (selectedPrompt && selectedPrompt.id === promptId) {
+        setSelectedPrompt(null);
+        setShowPromptEditor(false);
+      }
+      alert('✅ Prompt verwijderd');
+    } catch (error: any) {
+      console.error("Error deleting prompt:", error);
+      alert(`❌ Fout bij verwijderen: ${error.message || 'Onbekende fout'}`);
+    }
+  };
+
+  const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>, promptId: string) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    setUploadingFile(true);
+    try {
+      const reader = new FileReader();
+      reader.onload = async (e) => {
+        const content = e.target?.result as string;
+        await promptService.addFileToPrompt(promptId, file.name, content);
+        const updatedPrompts = await promptService.getPrompts();
+        setPrompts(updatedPrompts);
+        setUploadingFile(false);
+      };
+      reader.readAsText(file);
+    } catch (error) {
+      console.error("Error uploading file:", error);
+      alert("Fout bij het uploaden van het bestand.");
+      setUploadingFile(false);
+    }
+  };
+
+  const handleEditPrompt = (prompt: Prompt) => {
+    setSelectedPrompt(prompt);
+    setPromptName(prompt.name);
+    setPromptContent(prompt.promptTekst || '');
+    setPromptType(prompt.type);
+    setShowPromptEditor(true);
+  };
+
+  const handleNewPrompt = () => {
+    setSelectedPrompt(null);
+    setPromptName('');
+    setPromptContent('');
+    setPromptType('publiek_organisatie_profiel');
+    setShowPromptEditor(true);
+  };
+
+  if (loading) {
+    return <div className="text-center py-10 text-gray-500">Laden...</div>;
+  }
+
+  return (
+    <div className="space-y-6">
+      <div className="flex justify-between items-center mb-6">
+        <h2 className="text-2xl font-bold text-slate-900">Instellingen</h2>
+      </div>
+
+      {/* Tabs */}
+      <div className="flex border-b border-gray-200 mb-6">
+        <button
+          onClick={() => setActiveTab('autorisatie')}
+          className={`px-6 py-3 text-sm font-medium transition-colors ${
+            activeTab === 'autorisatie'
+              ? 'text-richting-orange border-b-2 border-richting-orange'
+              : 'text-gray-500 hover:text-gray-700'
+          }`}
+        >
+          🔐 Autorisatie
+        </button>
+        <button
+          onClick={() => setActiveTab('promptbeheer')}
+          className={`px-6 py-3 text-sm font-medium transition-colors ${
+            activeTab === 'promptbeheer'
+              ? 'text-richting-orange border-b-2 border-richting-orange'
+              : 'text-gray-500 hover:text-gray-700'
+          }`}
+        >
+          📝 Promptbeheer
+        </button>
+        <button
+          onClick={() => setActiveTab('databeheer')}
+          className={`px-6 py-3 text-sm font-medium transition-colors ${
+            activeTab === 'databeheer'
+              ? 'text-richting-orange border-b-2 border-richting-orange'
+              : 'text-gray-500 hover:text-gray-700'
+          }`}
+        >
+          💾 Data Beheer
+        </button>
+        <button
+          onClick={() => setActiveTab('typebeheer')}
+          className={`px-6 py-3 text-sm font-medium transition-colors ${
+            activeTab === 'typebeheer'
+              ? 'text-richting-orange border-b-2 border-richting-orange'
+              : 'text-gray-500 hover:text-gray-700'
+          }`}
+        >
+          🏷️ Type Beheer
+        </button>
+      </div>
+
+      {/* Autorisatie Tab */}
+      {activeTab === 'autorisatie' && (
+        <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+          <div className="flex justify-between items-center mb-6">
+            <h3 className="text-lg font-bold text-slate-900">Gebruikers</h3>
+            <button
+              onClick={() => {
+                // TODO: Implement user creation modal
+                alert('Gebruiker toevoegen functie komt binnenkort');
+              }}
+              className="bg-richting-orange text-white px-4 py-2 rounded-lg font-bold hover:bg-orange-600 transition-colors"
+            >
+              + Toevoegen
+            </button>
+          </div>
+          <div className="space-y-4">
+            {users.length === 0 ? (
+              <div className="text-center py-10 text-gray-500">
+                <p>Nog geen gebruikers gevonden.</p>
+              </div>
+            ) : (
+              users.map(u => (
+                <div key={u.id} className="flex items-center justify-between p-4 border border-gray-200 rounded-lg hover:border-richting-orange transition-colors">
+                  <div className="flex items-center gap-4 flex-1">
+                    <img src={u.avatarUrl || `https://ui-avatars.com/api/?name=${encodeURIComponent(u.name)}`} alt={u.name} className="w-10 h-10 rounded-full" />
+                    <div className="flex-1">
+                      <p className="font-bold text-slate-900">{u.name}</p>
+                      <p className="text-sm text-gray-500">{u.email}</p>
+                      <p className="text-xs text-gray-400 mt-1">Rol: {u.role}</p>
+                    </div>
+                    <select
+                      value={u.role}
+                      onChange={(e) => handleRoleChange(u.id, e.target.value as UserRole)}
+                      className="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-richting-orange focus:border-richting-orange"
+                    >
+                      <option value={UserRole.ADMIN}>Admin</option>
+                      <option value={UserRole.EDITOR}>Editor</option>
+                      <option value={UserRole.READER}>Reader</option>
+                    </select>
+                  </div>
+                  <div className="flex items-center gap-2 ml-4">
+                    <button
+                      onClick={() => {
+                        // TODO: Implement user edit modal
+                        alert('Gebruiker bewerken functie komt binnenkort');
+                      }}
+                      className="bg-blue-600 text-white px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-blue-700 transition-colors"
+                    >
+                      Bewerken
+                    </button>
+                    <button
+                      onClick={async () => {
+                        if (!window.confirm(`Weet je zeker dat je gebruiker "${u.name}" wilt verwijderen?`)) {
+                          return;
+                        }
+                        try {
+                          await authService.deleteUser(u.id);
+                          const updatedUsers = await authService.getAllUsers();
+                          setUsers(updatedUsers);
+                          alert('✅ Gebruiker verwijderd');
+                        } catch (error: any) {
+                          alert(`❌ Fout: ${error.message || 'Onbekende fout'}`);
+                        }
+                      }}
+                      className="bg-red-600 text-white px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-red-700 transition-colors"
+                    >
+                      Verwijderen
+                    </button>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Promptbeheer Tab */}
+      {activeTab === 'promptbeheer' && (
+        <div className="space-y-6">
+          <div className="flex justify-between items-center">
+            <h3 className="text-lg font-bold text-slate-900">Prompts</h3>
+            <div className="flex gap-2">
+              <button
+                onClick={async () => {
+                  try {
+                    const exportData = await promptService.exportPrompts();
+                    const blob = new Blob([exportData], { type: 'application/json' });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = `prompts-backup-${new Date().toISOString().split('T')[0]}.json`;
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    URL.revokeObjectURL(url);
+                    alert('✅ Prompts geëxporteerd');
+                  } catch (error: any) {
+                    alert(`❌ Fout bij exporteren: ${error.message || 'Onbekende fout'}`);
+                  }
+                }}
+                className="bg-blue-600 text-white px-4 py-2 rounded-lg font-bold hover:bg-blue-700 transition-colors text-sm"
+              >
+                📥 Exporteer
+              </button>
+              <button
+                onClick={() => {
+                  const input = document.createElement('input');
+                  input.type = 'file';
+                  input.accept = '.json';
+                  input.onchange = async (e) => {
+                    const file = (e.target as HTMLInputElement).files?.[0];
+                    if (!file) return;
+                    
+                    const text = await file.text();
+                    const overwrite = window.confirm('Wil je bestaande prompts overschrijven? (Nee = alleen nieuwe toevoegen)');
+                    
+                    try {
+                      const result = await promptService.importPrompts(text, user.id, overwrite);
+                      alert(`✅ ${result.message}`);
+                      const updatedPrompts = await promptService.getPrompts();
+                      setPrompts(updatedPrompts);
+                    } catch (error: any) {
+                      alert(`❌ Fout bij importeren: ${error.message || 'Onbekende fout'}`);
+                    }
+                  };
+                  input.click();
+                }}
+                className="bg-green-600 text-white px-4 py-2 rounded-lg font-bold hover:bg-green-700 transition-colors text-sm"
+              >
+                📤 Importeer
+              </button>
+              <button
+                onClick={handleNewPrompt}
+                className="bg-richting-orange text-white px-4 py-2 rounded-lg font-bold hover:bg-orange-600 transition-colors"
+              >
+                + Toevoegen
+              </button>
+            </div>
+          </div>
+
+          {showPromptEditor ? (
+            <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+              <h4 className="text-lg font-bold text-slate-900 mb-4">
+                {selectedPrompt ? 'Prompt Bewerken' : 'Nieuwe Prompt'}
+              </h4>
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Naam</label>
+                  <input
+                    type="text"
+                    value={promptName}
+                    onChange={(e) => setPromptName(e.target.value)}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-richting-orange focus:border-richting-orange"
+                    placeholder="Bijv. Branche Analyse Prompt"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Type</label>
+                  <select
+                    value={promptType}
+                    onChange={(e) => setPromptType(e.target.value)}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-richting-orange focus:border-richting-orange"
+                  >
+                    {promptTypes.map(type => (
+                      <option key={type.type} value={type.type}>{type.label}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Inhoud (promptTekst)</label>
+                  <textarea
+                    value={promptContent}
+                    onChange={(e) => setPromptContent(e.target.value)}
+                    rows={15}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-richting-orange focus:border-richting-orange font-mono text-sm"
+                    placeholder="Voer de prompt inhoud in..."
+                  />
+                </div>
+                {selectedPrompt && (
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      id="isActief"
+                      checked={selectedPrompt.isActief || false}
+                      onChange={async (e) => {
+                        if (selectedPrompt && (selectedPrompt.type === 'publiek_organisatie_profiel' || selectedPrompt.type === 'publiek_cultuur_profiel')) {
+                          if (e.target.checked) {
+                            await handleActivatePrompt(selectedPrompt.id, selectedPrompt.type as 'publiek_organisatie_profiel' | 'publiek_cultuur_profiel');
+                            const updated = await promptService.getPrompt(selectedPrompt.id);
+                            if (updated) setSelectedPrompt(updated);
+                          } else {
+                            // Deactivate
+                            await updateDoc(doc(db, 'prompts', selectedPrompt.id), { 
+                              isActief: false,
+                              updatedAt: new Date().toISOString()
+                            });
+                            const updated = await promptService.getPrompt(selectedPrompt.id);
+                            if (updated) setSelectedPrompt(updated);
+                            const allPrompts = await promptService.getPrompts();
+                            setPrompts(allPrompts);
+                          }
+                        }
+                      }}
+                      disabled={selectedPrompt.type === 'other'}
+                      className="w-4 h-4 text-richting-orange border-gray-300 rounded focus:ring-richting-orange"
+                    />
+                    <label htmlFor="isActief" className="text-sm text-gray-700">
+                      Actief (alleen voor Branche Analyse / Publiek Cultuur Profiel)
+                    </label>
+                  </div>
+                )}
+                {selectedPrompt && selectedPrompt.files && selectedPrompt.files.length > 0 && (
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">Bijgevoegde Bestanden</label>
+                    <div className="space-y-2">
+                      {selectedPrompt.files.map(file => (
+                        <div key={file.id} className="flex items-center justify-between p-2 bg-gray-50 rounded border">
+                          <span className="text-sm text-gray-700">{file.name}</span>
+                          <button
+                            onClick={async () => {
+                              if (selectedPrompt) {
+                                await promptService.deleteFileFromPrompt(selectedPrompt.id, file.id);
+                                const updated = await promptService.getPrompt(selectedPrompt.id);
+                                if (updated) setSelectedPrompt(updated);
+                                const allPrompts = await promptService.getPrompts();
+                                setPrompts(allPrompts);
+                              }
+                            }}
+                            className="text-red-500 hover:text-red-700 text-sm"
+                          >
+                            Verwijderen
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {selectedPrompt && (
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">Bestand Toevoegen</label>
+                    <input
+                      type="file"
+                      onChange={(e) => selectedPrompt && handleFileUpload(e, selectedPrompt.id)}
+                      disabled={uploadingFile}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                    />
+                    {uploadingFile && <p className="text-sm text-gray-500 mt-2">Uploaden...</p>}
+                  </div>
+                )}
+                <div className="flex gap-4">
+                  <button
+                    onClick={handleSavePrompt}
+                    className="bg-richting-orange text-white px-6 py-2 rounded-lg font-bold hover:bg-orange-600 transition-colors"
+                  >
+                    Opslaan
+                  </button>
+                  <button
+                    onClick={() => {
+                      setShowPromptEditor(false);
+                      setSelectedPrompt(null);
+                      setPromptName('');
+                      setPromptContent('');
+                    }}
+                    className="bg-gray-200 text-gray-700 px-6 py-2 rounded-lg font-bold hover:bg-gray-300 transition-colors"
+                  >
+                    Annuleren
+                  </button>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              {prompts.length === 0 ? (
+                <div className="text-center py-10 text-gray-500 bg-white rounded-xl border border-gray-200">
+                  <p className="mb-2">Nog geen prompts gevonden.</p>
+                  <p className="text-xs text-gray-400 mb-4">Controleer de browser console (F12) voor details.</p>
+                  <button
+                    onClick={async () => {
+                      try {
+                        const result = await promptService.restoreDefaultPrompts(user.id);
+                        alert(`✅ ${result.message}`);
+                        const updatedPrompts = await promptService.getPrompts();
+                        setPrompts(updatedPrompts);
+                      } catch (error: any) {
+                        alert(`❌ Fout: ${error.message || 'Onbekende fout'}`);
+                      }
+                    }}
+                    className="bg-richting-orange text-white px-4 py-2 rounded-lg font-bold hover:bg-orange-600 transition-colors"
+                  >
+                    Herstel Default Prompts
+                  </button>
+                </div>
+              ) : (
+                prompts
+                  .slice()
+                  .sort((a, b) => {
+                    // Sorteer primair op nummer aan het begin van de naam (bijv. "1. ..."), anders op naam
+                    const getNum = (p: Prompt) => {
+                      const match = (p.name || '').trim().match(/^(\d+)/);
+                      return match ? parseInt(match[1], 10) : Number.MAX_SAFE_INTEGER;
+                    };
+                    const na = getNum(a);
+                    const nb = getNum(b);
+                    if (na !== nb) return na - nb;
+                    // Fallback: sorteer op versie desc om nieuwste eerst binnen hetzelfde nummer te tonen
+                    return (b.versie || 0) - (a.versie || 0);
+                  })
+                  .map(prompt => {
+                    return (
+                      <div key={prompt.id} className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 hover:border-richting-orange transition-colors">
+                        <div className="flex justify-between items-start mb-4">
+                          <div className="flex-1">
+                            <div className="flex items-center gap-3 mb-2">
+                              <h4 className="font-bold text-slate-900">{prompt.name}</h4>
+                              <span className="px-2 py-0.5 bg-blue-100 text-blue-700 rounded text-xs font-bold">
+                                Versie {prompt.versie || 1}
+                              </span>
+                              {prompt.isActief && (
+                                <span className="px-2 py-0.5 bg-green-100 text-green-700 rounded text-xs font-bold">
+                                  ✓ Actief
+                                </span>
+                              )}
+                            </div>
+                            <p className="text-xs text-gray-400">
+                              Aangemaakt: {new Date(prompt.createdAt).toLocaleDateString('nl-NL')}
+                              {prompt.files && prompt.files.length > 0 && (
+                                <span className="ml-2">• {prompt.files.length} bestand(en)</span>
+                              )}
+                            </p>
+                          </div>
+                          <div className="flex gap-2 ml-4">
+                            {prompt.type !== 'other' && !prompt.isActief && (
+                              <button
+                                onClick={() => handleActivatePrompt(prompt.id, prompt.type)}
+                                className="bg-green-600 text-white px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-green-700 transition-colors"
+                              >
+                                Activeer
+                              </button>
+                            )}
+                            <button
+                              onClick={() => handleEditPrompt(prompt)}
+                              className="bg-blue-600 text-white px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-blue-700 transition-colors"
+                            >
+                              Bewerken
+                            </button>
+                            <button
+                              onClick={() => handleDeletePrompt(prompt.id)}
+                              className="bg-red-600 text-white px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-red-700 transition-colors"
+                            >
+                              Verwijderen
+                            </button>
+                          </div>
+                        </div>
+                        <div className="bg-gray-50 p-4 rounded border border-gray-200">
+                          <p className="text-sm text-gray-700 font-mono whitespace-pre-wrap line-clamp-3">
+                            {prompt.promptTekst?.substring(0, 300) || ''}...
+                          </p>
+                        </div>
+                      </div>
+                    );
+                  })
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Type Beheer Tab */}
+      {activeTab === 'typebeheer' && (
+        <div className="space-y-6">
+          <div className="flex justify-between items-center">
+            <h3 className="text-lg font-bold text-slate-900">Types</h3>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={newTypeName}
+                onChange={(e) => setNewTypeName(e.target.value)}
+                placeholder="Type ID (bijv. nieuwe_analyse)"
+                className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-richting-orange focus:border-richting-orange"
+              />
+              <input
+                type="text"
+                value={newTypeLabel}
+                onChange={(e) => setNewTypeLabel(e.target.value)}
+                placeholder="Label (bijv. Nieuwe Analyse)"
+                className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-richting-orange focus:border-richting-orange"
+              />
+              <button
+                onClick={async () => {
+                  if (!newTypeName || !newTypeLabel) {
+                    alert('Vul type ID en label in');
+                    return;
+                  }
+                  try {
+                    await promptService.addPromptType(newTypeName, newTypeLabel, user.id);
+                    const typesWithLabels = await promptService.getPromptTypesWithLabels();
+                    setPromptTypes(typesWithLabels);
+                    setNewTypeName('');
+                    setNewTypeLabel('');
+                    alert('✅ Type toegevoegd');
+                  } catch (error: any) {
+                    alert(`❌ Fout: ${error.message || 'Onbekende fout'}`);
+                  }
+                }}
+                className="bg-richting-orange text-white px-4 py-2 rounded-lg font-bold hover:bg-orange-600 transition-colors"
+              >
+                + Toevoegen
+              </button>
+            </div>
+          </div>
+
+          <div className="space-y-4">
+            {promptTypes.map(type => (
+              <div key={type.type} className="bg-white rounded-xl shadow-sm border border-gray-200 p-4">
+                {editingType?.type === type.type ? (
+                  // Edit mode
+                  <div className="space-y-3">
+                    <div>
+                      <label className="block text-xs font-medium text-gray-700 mb-1">Type ID (niet wijzigbaar)</label>
+                      <input
+                        type="text"
+                        value={type.type}
+                        disabled
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-gray-50 text-gray-500 text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-700 mb-1">Label</label>
+                      <input
+                        type="text"
+                        value={editingTypeLabel}
+                        onChange={(e) => setEditingTypeLabel(e.target.value)}
+                        placeholder="Label (bijv. Nieuwe Analyse)"
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-richting-orange focus:border-richting-orange"
+                      />
+                    </div>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={async () => {
+                          if (!editingTypeLabel.trim()) {
+                            alert('Label mag niet leeg zijn');
+                            return;
+                          }
+                          try {
+                            await promptService.updatePromptType(type.type, editingTypeLabel, user.id);
+                            const typesWithLabels = await promptService.getPromptTypesWithLabels();
+                            setPromptTypes(typesWithLabels);
+                            setEditingType(null);
+                            setEditingTypeLabel('');
+                            alert('✅ Type bijgewerkt');
+                          } catch (error: any) {
+                            alert(`❌ Fout: ${error.message || 'Onbekende fout'}`);
+                          }
+                        }}
+                        className="bg-green-600 text-white px-4 py-2 rounded-lg text-sm font-bold hover:bg-green-700 transition-colors"
+                      >
+                        Opslaan
+                      </button>
+                      <button
+                        onClick={() => {
+                          setEditingType(null);
+                          setEditingTypeLabel('');
+                        }}
+                        className="bg-gray-200 text-gray-700 px-4 py-2 rounded-lg text-sm font-bold hover:bg-gray-300 transition-colors"
+                      >
+                        Annuleren
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  // View mode
+                  <div className="flex justify-between items-center">
+                    <div>
+                      <h4 className="font-bold text-slate-900">{type.label}</h4>
+                      <p className="text-xs text-gray-500">ID: {type.type}</p>
+                      <p className="text-xs text-gray-400 mt-1">
+                        {prompts.filter(p => p.type === type.type).length} prompt(s) van dit type
+                      </p>
+                    </div>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => {
+                          setEditingType(type);
+                          setEditingTypeLabel(type.label);
+                        }}
+                        className="bg-blue-600 text-white px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-blue-700 transition-colors"
+                      >
+                        Bewerken
+                      </button>
+                      <button
+                        onClick={async () => {
+                          if (!window.confirm(`Weet je zeker dat je het type "${type.label}" wilt verwijderen? Dit kan alleen als er geen prompts meer van dit type zijn.`)) {
+                            return;
+                          }
+                          try {
+                            await promptService.deletePromptType(type.type);
+                            const typesWithLabels = await promptService.getPromptTypesWithLabels();
+                            setPromptTypes(typesWithLabels);
+                            alert('✅ Type verwijderd');
+                          } catch (error: any) {
+                            alert(`❌ Fout: ${error.message || 'Onbekende fout'}`);
+                          }
+                        }}
+                        className="bg-red-600 text-white px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-red-700 transition-colors"
+                      >
+                        Verwijderen
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Data Beheer Tab */}
+      {activeTab === 'databeheer' && (
+        <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+          <div className="flex justify-between items-center mb-6">
+            <h3 className="text-lg font-bold text-slate-900">Imports</h3>
+            <button
+              onClick={() => {
+                // TODO: Implement import creation
+                alert('Import toevoegen functie komt binnenkort');
+              }}
+              className="bg-richting-orange text-white px-4 py-2 rounded-lg font-bold hover:bg-orange-600 transition-colors"
+            >
+              + Toevoegen
+            </button>
+          </div>
+          <div className="space-y-4">
+            {/* Placeholder for imports list - TODO: Implement actual imports tracking */}
+            <div className="text-center py-10 text-gray-500">
+              <p>Nog geen imports gevonden.</p>
+              <p className="text-xs text-gray-400 mt-2">Import functionaliteit komt binnenkort beschikbaar.</p>
+            </div>
+            
+            {/* Richting Locaties Section (temporary) */}
+            <div className="mt-8 pt-8 border-t border-gray-200">
+              <div className="flex justify-between items-center mb-4">
+                <h4 className="text-md font-bold text-slate-700">Richting Locaties Database</h4>
+                <button
+                  onClick={handleSeedRichtingLocaties}
+                  disabled={seedingLocaties}
+                  className="bg-richting-orange text-white px-4 py-2 rounded-lg font-bold hover:bg-orange-600 disabled:opacity-50 transition-colors flex items-center gap-2 text-sm"
+                >
+                  {seedingLocaties ? (
+                    <>
+                      <span className="animate-spin">⏳</span> Seeden...
+                    </>
+                  ) : (
+                    <>
+                      🌱 Seed Locaties
+                    </>
+                  )}
+                </button>
+              </div>
+              <p className="text-sm text-gray-500 mb-4">
+                {richtingLocaties.length > 0 
+                  ? `${richtingLocaties.length} locaties geladen` 
+                  : 'Nog geen locaties in database'}
+              </p>
+              {richtingLocaties.length > 0 && (
+                <div className="max-h-96 overflow-y-auto space-y-2">
+                  {richtingLocaties.map(loc => (
+                    <div key={loc.id} className="p-3 bg-gray-50 rounded border border-gray-200">
+                      <div className="flex items-start justify-between">
+                        <div className="flex-1">
+                          <p className="font-bold text-slate-900 text-sm">{loc.vestiging}</p>
+                          <p className="text-xs text-gray-600 mt-1">{loc.regio}</p>
+                          <p className="text-xs text-gray-500 mt-1">{loc.volledigAdres}</p>
+                        </div>
+                        <div className="text-xs text-gray-400 ml-4">
+                          {loc.latitude.toFixed(4)}, {loc.longitude.toFixed(4)}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
 // --- MAIN APP COMPONENT ---
 const App = () => {
   const [user, setUser] = useState<User | null>(null);
@@ -1927,6 +4301,8 @@ const App = () => {
            onUploadComplete={() => { setCurrentView('dashboard'); }} 
         />
       )}
+      {currentView === 'settings' && <SettingsView user={user} />}
+      {currentView === 'regio' && <RegioView user={user} />}
 
       {/* DOCUMENT MODAL */}
       {selectedDoc && (
