@@ -3304,6 +3304,15 @@ const SettingsView = ({ user }: { user: User }) => {
   const [newLocatieLongitude, setNewLocatieLongitude] = useState('');
   const [savingLocatie, setSavingLocatie] = useState(false);
   
+  // Data management sub tabs
+  const [dataManagementSubTab, setDataManagementSubTab] = useState<'klanten' | 'locaties' | 'documents'>('klanten');
+  
+  // Import customers state
+  const [showImportCustomersModal, setShowImportCustomersModal] = useState(false);
+  const [importCustomersFile, setImportCustomersFile] = useState<File | null>(null);
+  const [importCustomersPreview, setImportCustomersPreview] = useState<Partial<Customer>[] | null>(null);
+  const [importingCustomers, setImportingCustomers] = useState(false);
+  
   // User management state
   const [showAddUserModal, setShowAddUserModal] = useState(false);
   const [newUserName, setNewUserName] = useState('');
@@ -3403,6 +3412,128 @@ const SettingsView = ({ user }: { user: User }) => {
     setEditUserName(user.name);
     setEditUserEmail(user.email);
     setEditUserRole(user.role);
+  };
+
+  const handleImportCustomersFileSelect = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    setImportCustomersFile(file);
+    
+    try {
+      const text = await file.text();
+      const lines = text.split('\n').filter(line => line.trim());
+      if (lines.length === 0) {
+        alert('CSV bestand is leeg');
+        return;
+      }
+
+      // Parse CSV header
+      const headers = lines[0].split(',').map(h => h.trim().toLowerCase());
+      const nameIdx = headers.findIndex(h => h === 'name' || h === 'naam');
+      const industryIdx = headers.findIndex(h => h === 'industry' || h === 'branche');
+      const websiteIdx = headers.findIndex(h => h === 'website');
+      const statusIdx = headers.findIndex(h => h === 'status');
+
+      if (nameIdx === -1) {
+        alert('CSV moet minimaal een "name" kolom bevatten');
+        return;
+      }
+
+      // Parse data rows
+      const customers: Partial<Customer>[] = [];
+      for (let i = 1; i < lines.length; i++) {
+        const values = lines[i].split(',').map(v => v.trim());
+        if (values.length < 1) continue;
+
+        const name = values[nameIdx];
+        if (!name) continue;
+
+        customers.push({
+          name,
+          industry: industryIdx >= 0 ? values[industryIdx] : undefined,
+          website: websiteIdx >= 0 ? values[websiteIdx] : undefined,
+          status: (statusIdx >= 0 && values[statusIdx]) ? values[statusIdx] as Customer['status'] : 'active',
+          assignedUserIds: [],
+          createdAt: new Date().toISOString()
+        });
+      }
+
+      setImportCustomersPreview(customers);
+    } catch (error: any) {
+      console.error("Error parsing CSV:", error);
+      alert(`Fout bij lezen CSV: ${error.message || 'Onbekende fout'}`);
+    }
+  };
+
+  const handleImportCustomers = async () => {
+    if (!importCustomersPreview || importCustomersPreview.length === 0) {
+      alert('Geen klanten om te importeren');
+      return;
+    }
+
+    setImportingCustomers(true);
+    try {
+      const result = await customerService.importCustomers(importCustomersPreview as Omit<Customer, 'id'>[]);
+      alert(`✅ ${result.success} klanten geïmporteerd${result.errors.length > 0 ? `\n\n⚠️ ${result.errors.length} fouten:\n${result.errors.slice(0, 5).join('\n')}` : ''}`);
+      setShowImportCustomersModal(false);
+      setImportCustomersFile(null);
+      setImportCustomersPreview(null);
+    } catch (error: any) {
+      console.error("Error importing customers:", error);
+      alert(`❌ Fout bij importeren: ${error.message || 'Onbekende fout'}`);
+    } finally {
+      setImportingCustomers(false);
+    }
+  };
+
+  const handleExportCustomers = async () => {
+    try {
+      const customers = await customerService.getAllCustomers();
+      const csv = [
+        ['name', 'industry', 'website', 'status'].join(','),
+        ...customers.map(c => [
+          c.name,
+          c.industry,
+          c.website || '',
+          c.status
+        ].map(v => `"${v}"`).join(','))
+      ].join('\n');
+
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `klanten-export-${new Date().toISOString().split('T')[0]}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      alert(`✅ ${customers.length} klanten geëxporteerd`);
+    } catch (error: any) {
+      console.error("Error exporting customers:", error);
+      alert(`❌ Fout bij exporteren: ${error.message || 'Onbekende fout'}`);
+    }
+  };
+
+  const handleExportDocuments = async () => {
+    try {
+      const documents = await dbService.getDocuments();
+      const data = JSON.stringify(documents, null, 2);
+      const blob = new Blob([data], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `documents-export-${new Date().toISOString().split('T')[0]}.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      alert(`✅ ${documents.length} documents geëxporteerd`);
+    } catch (error: any) {
+      console.error("Error exporting documents:", error);
+      alert(`❌ Fout bij exporteren: ${error.message || 'Onbekende fout'}`);
+    }
   };
 
   const handleUpdateUser = async () => {
@@ -4367,89 +4498,271 @@ const SettingsView = ({ user }: { user: User }) => {
       {/* Data Beheer Tab */}
       {activeTab === 'databeheer' && (
         <div className="space-y-6">
-          {/* Richting Locaties Section */}
+          {/* Data Management Tabs */}
           <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
-            <div className="flex justify-between items-center mb-6">
-              <h3 className="text-lg font-bold text-slate-900">Richting Locaties</h3>
+            <div className="flex gap-2 mb-6 border-b border-gray-200">
+              <button
+                onClick={() => setDataManagementSubTab('klanten')}
+                className={`px-4 py-2 text-sm font-medium transition-colors border-b-2 ${
+                  dataManagementSubTab === 'klanten'
+                    ? 'text-richting-orange border-richting-orange'
+                    : 'text-gray-500 border-transparent hover:text-gray-700'
+                }`}
+              >
+                👥 Klanten
+              </button>
+              <button
+                onClick={() => setDataManagementSubTab('locaties')}
+                className={`px-4 py-2 text-sm font-medium transition-colors border-b-2 ${
+                  dataManagementSubTab === 'locaties'
+                    ? 'text-richting-orange border-richting-orange'
+                    : 'text-gray-500 border-transparent hover:text-gray-700'
+                }`}
+              >
+                📍 Richting Locaties
+              </button>
+              <button
+                onClick={() => setDataManagementSubTab('documents')}
+                className={`px-4 py-2 text-sm font-medium transition-colors border-b-2 ${
+                  dataManagementSubTab === 'documents'
+                    ? 'text-richting-orange border-richting-orange'
+                    : 'text-gray-500 border-transparent hover:text-gray-700'
+                }`}
+              >
+                📄 Documents
+              </button>
+            </div>
+
+            {/* Klanten Section */}
+            {dataManagementSubTab === 'klanten' && (
+              <div className="space-y-4">
+                <div className="flex justify-between items-center">
+                  <h3 className="text-lg font-bold text-slate-900">Klanten Beheer</h3>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={handleExportCustomers}
+                      className="bg-blue-600 text-white px-4 py-2 rounded-lg font-bold hover:bg-blue-700 transition-colors text-sm"
+                    >
+                      📥 Exporteer
+                    </button>
+                    <button
+                      onClick={() => setShowImportCustomersModal(true)}
+                      className="bg-green-600 text-white px-4 py-2 rounded-lg font-bold hover:bg-green-700 transition-colors text-sm"
+                    >
+                      📤 Importeer (CSV/Google Sheets)
+                    </button>
+                  </div>
+                </div>
+                <div className="bg-blue-50 border-l-4 border-blue-500 p-4 rounded">
+                  <p className="text-sm text-blue-700">
+                    <strong>💡 Tip:</strong> Exporteer je Google Spreadsheet als CSV (Bestand → Downloaden → CSV) en importeer het hier.
+                  </p>
+                </div>
+                <div className="text-sm text-gray-600">
+                  <p className="font-bold mb-2">Verwachte CSV kolommen:</p>
+                  <ul className="list-disc list-inside space-y-1">
+                    <li><code>name</code> - Klantnaam (verplicht)</li>
+                    <li><code>industry</code> - Branche (optioneel)</li>
+                    <li><code>website</code> - Website URL (optioneel)</li>
+                    <li><code>status</code> - Status: active, prospect, churned, rejected (optioneel, default: active)</li>
+                  </ul>
+                </div>
+              </div>
+            )}
+
+            {/* Richting Locaties Section */}
+            {dataManagementSubTab === 'locaties' && (
+              <div className="space-y-4">
+                <div className="flex justify-between items-center">
+                  <h3 className="text-lg font-bold text-slate-900">Richting Locaties</h3>
+                  <button
+                    onClick={() => {
+                      setEditingLocatie(null);
+                      setNewLocatieVestiging('');
+                      setNewLocatieStad('');
+                      setNewLocatieRegio('');
+                      setNewLocatieAdres('');
+                      setNewLocatieVolledigAdres('');
+                      setNewLocatieLatitude('');
+                      setNewLocatieLongitude('');
+                      setShowAddLocatieModal(true);
+                    }}
+                    className="bg-richting-orange text-white px-4 py-2 rounded-lg font-bold hover:bg-orange-600 transition-colors"
+                  >
+                    + Toevoegen
+                  </button>
+                </div>
+                <div className="space-y-4">
+                  {richtingLocaties.length === 0 ? (
+                    <div className="text-center py-10 text-gray-500">
+                      <p>Nog geen locaties gevonden.</p>
+                    </div>
+                  ) : (
+                    richtingLocaties.map(loc => (
+                      <div key={loc.id} className="flex items-center justify-between p-4 border border-gray-200 rounded-lg hover:border-richting-orange transition-colors">
+                        <div className="flex-1">
+                          <p className="font-bold text-slate-900">{loc.vestiging}</p>
+                          <p className="text-sm text-gray-500">{loc.stad}</p>
+                          {loc.regio && (
+                            <p className="text-xs text-gray-400 mt-1">Regio: {loc.regio}</p>
+                          )}
+                          {loc.volledigAdres && (
+                            <p className="text-xs text-gray-400 mt-1">{loc.volledigAdres}</p>
+                          )}
+                          {loc.latitude && loc.longitude && (
+                            <p className="text-xs text-gray-400 mt-1">
+                              📍 {loc.latitude.toFixed(4)}, {loc.longitude.toFixed(4)}
+                            </p>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-2 ml-4">
+                          <button
+                            onClick={() => {
+                              setEditingLocatie(loc);
+                              setNewLocatieVestiging(loc.vestiging);
+                              setNewLocatieStad(loc.stad);
+                              setNewLocatieRegio(loc.regio || '');
+                              setNewLocatieAdres(loc.adres || '');
+                              setNewLocatieVolledigAdres(loc.volledigAdres || '');
+                              setNewLocatieLatitude(loc.latitude?.toString() || '');
+                              setNewLocatieLongitude(loc.longitude?.toString() || '');
+                              setShowAddLocatieModal(true);
+                            }}
+                            className="bg-blue-600 text-white px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-blue-700 transition-colors"
+                          >
+                            Bewerken
+                          </button>
+                          <button
+                            onClick={async () => {
+                              if (!window.confirm(`Weet je zeker dat je locatie "${loc.vestiging}" wilt verwijderen?`)) {
+                                return;
+                              }
+                              try {
+                                await richtingLocatiesService.deleteLocatie(loc.id);
+                                const updatedLocaties = await richtingLocatiesService.getAllLocaties();
+                                setRichtingLocaties(updatedLocaties);
+                                alert('✅ Locatie verwijderd');
+                              } catch (error: any) {
+                                alert(`❌ Fout: ${error.message || 'Onbekende fout'}`);
+                              }
+                            }}
+                            className="bg-red-600 text-white px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-red-700 transition-colors"
+                          >
+                            Verwijderen
+                          </button>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Documents Section */}
+            {dataManagementSubTab === 'documents' && (
+              <div className="space-y-4">
+                <div className="flex justify-between items-center">
+                  <h3 className="text-lg font-bold text-slate-900">Documents Beheer</h3>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={handleExportDocuments}
+                      className="bg-blue-600 text-white px-4 py-2 rounded-lg font-bold hover:bg-blue-700 transition-colors text-sm"
+                    >
+                      📥 Exporteer
+                    </button>
+                  </div>
+                </div>
+                <div className="text-center py-10 text-gray-500">
+                  <p>Document beheer functionaliteit komt binnenkort.</p>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Import Customers Modal */}
+      {showImportCustomersModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-xl shadow-xl p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-lg font-bold text-slate-900">Klanten Importeren (CSV/Google Sheets)</h3>
               <button
                 onClick={() => {
-                  setEditingLocatie(null);
-                  setNewLocatieVestiging('');
-                  setNewLocatieStad('');
-                  setNewLocatieRegio('');
-                  setNewLocatieAdres('');
-                  setNewLocatieVolledigAdres('');
-                  setNewLocatieLatitude('');
-                  setNewLocatieLongitude('');
-                  setShowAddLocatieModal(true);
+                  setShowImportCustomersModal(false);
+                  setImportCustomersFile(null);
+                  setImportCustomersPreview(null);
                 }}
-                className="bg-richting-orange text-white px-4 py-2 rounded-lg font-bold hover:bg-orange-600 transition-colors"
+                className="text-gray-400 hover:text-gray-600 text-2xl font-bold"
               >
-                + Toevoegen
+                ×
               </button>
             </div>
             <div className="space-y-4">
-              {richtingLocaties.length === 0 ? (
-                <div className="text-center py-10 text-gray-500">
-                  <p>Nog geen locaties gevonden.</p>
-                </div>
-              ) : (
-                richtingLocaties.map(loc => (
-                  <div key={loc.id} className="flex items-center justify-between p-4 border border-gray-200 rounded-lg hover:border-richting-orange transition-colors">
-                    <div className="flex-1">
-                      <p className="font-bold text-slate-900">{loc.vestiging}</p>
-                      <p className="text-sm text-gray-500">{loc.stad}</p>
-                      {loc.regio && (
-                        <p className="text-xs text-gray-400 mt-1">Regio: {loc.regio}</p>
-                      )}
-                      {loc.volledigAdres && (
-                        <p className="text-xs text-gray-400 mt-1">{loc.volledigAdres}</p>
-                      )}
-                      {loc.latitude && loc.longitude && (
-                        <p className="text-xs text-gray-400 mt-1">
-                          📍 {loc.latitude.toFixed(4)}, {loc.longitude.toFixed(4)}
-                        </p>
-                      )}
-                    </div>
-                    <div className="flex items-center gap-2 ml-4">
-                      <button
-                        onClick={() => {
-                          setEditingLocatie(loc);
-                          setNewLocatieVestiging(loc.vestiging);
-                          setNewLocatieStad(loc.stad);
-                          setNewLocatieRegio(loc.regio || '');
-                          setNewLocatieAdres(loc.adres || '');
-                          setNewLocatieVolledigAdres(loc.volledigAdres || '');
-                          setNewLocatieLatitude(loc.latitude?.toString() || '');
-                          setNewLocatieLongitude(loc.longitude?.toString() || '');
-                          setShowAddLocatieModal(true);
-                        }}
-                        className="bg-blue-600 text-white px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-blue-700 transition-colors"
-                      >
-                        Bewerken
-                      </button>
-                      <button
-                        onClick={async () => {
-                          if (!window.confirm(`Weet je zeker dat je locatie "${loc.vestiging}" wilt verwijderen?`)) {
-                            return;
-                          }
-                          try {
-                            await richtingLocatiesService.deleteLocatie(loc.id);
-                            const updatedLocaties = await richtingLocatiesService.getAllLocaties();
-                            setRichtingLocaties(updatedLocaties);
-                            alert('✅ Locatie verwijderd');
-                          } catch (error: any) {
-                            alert(`❌ Fout: ${error.message || 'Onbekende fout'}`);
-                          }
-                        }}
-                        className="bg-red-600 text-white px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-red-700 transition-colors"
-                      >
-                        Verwijderen
-                      </button>
-                    </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">CSV Bestand Selecteren</label>
+                <input
+                  type="file"
+                  accept=".csv"
+                  onChange={handleImportCustomersFileSelect}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-richting-orange focus:border-richting-orange"
+                />
+                <p className="text-xs text-gray-500 mt-2">
+                  Exporteer je Google Spreadsheet als CSV (Bestand → Downloaden → CSV)
+                </p>
+              </div>
+              {importCustomersPreview && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Preview ({importCustomersPreview.length} klanten)</label>
+                  <div className="max-h-64 overflow-y-auto border border-gray-200 rounded-lg">
+                    <table className="w-full text-sm">
+                      <thead className="bg-gray-50 sticky top-0">
+                        <tr>
+                          <th className="px-3 py-2 text-left font-bold text-gray-700">Naam</th>
+                          <th className="px-3 py-2 text-left font-bold text-gray-700">Branche</th>
+                          <th className="px-3 py-2 text-left font-bold text-gray-700">Website</th>
+                          <th className="px-3 py-2 text-left font-bold text-gray-700">Status</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {importCustomersPreview.slice(0, 10).map((customer, idx) => (
+                          <tr key={idx} className="border-t border-gray-100">
+                            <td className="px-3 py-2">{customer.name}</td>
+                            <td className="px-3 py-2">{customer.industry}</td>
+                            <td className="px-3 py-2">{customer.website || '-'}</td>
+                            <td className="px-3 py-2">{customer.status || 'prospect'}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                    {importCustomersPreview.length > 10 && (
+                      <p className="text-xs text-gray-500 p-2 text-center">
+                        ... en {importCustomersPreview.length - 10} meer
+                      </p>
+                    )}
                   </div>
-                ))
+                </div>
               )}
+              <div className="flex gap-3 pt-2">
+                <button
+                  onClick={handleImportCustomers}
+                  disabled={!importCustomersPreview || importingCustomers}
+                  className="flex-1 bg-richting-orange text-white px-4 py-2 rounded-lg font-bold hover:bg-orange-600 disabled:opacity-50 transition-colors"
+                >
+                  {importingCustomers ? 'Importeren...' : `Importeer ${importCustomersPreview?.length || 0} klanten`}
+                </button>
+                <button
+                  onClick={() => {
+                    setShowImportCustomersModal(false);
+                    setImportCustomersFile(null);
+                    setImportCustomersPreview(null);
+                  }}
+                  disabled={importingCustomers}
+                  className="bg-gray-200 text-gray-700 px-4 py-2 rounded-lg font-bold hover:bg-gray-300 disabled:opacity-50 transition-colors"
+                >
+                  Annuleren
+                </button>
+              </div>
             </div>
           </div>
         </div>

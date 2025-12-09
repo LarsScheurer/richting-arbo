@@ -348,6 +348,45 @@ export const customerService = {
      await setDoc(doc(db, 'customers', customer.id), cleanData(customer));
   },
 
+  getAllCustomers: async (): Promise<Customer[]> => {
+    try {
+      const snapshot = await getDocs(collection(db, 'customers'));
+      return snapshot.docs.map(doc => {
+        const data = doc.data();
+        return { 
+          id: doc.id, 
+          ...data,
+          assignedUserIds: data.assignedUserIds || [] 
+        } as Customer;
+      });
+    } catch (e) {
+      console.error("Error fetching all customers:", e);
+      return [];
+    }
+  },
+
+  importCustomers: async (customers: Omit<Customer, 'id'>[]): Promise<{ success: number; errors: string[] }> => {
+    const errors: string[] = [];
+    let success = 0;
+    
+    for (const customerData of customers) {
+      try {
+        const customer: Customer = {
+          ...customerData,
+          id: `customer_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+          createdAt: customerData.createdAt || new Date().toISOString(),
+          assignedUserIds: customerData.assignedUserIds || []
+        };
+        await addDoc(collection(db, 'customers'), cleanData(customer));
+        success++;
+      } catch (e: any) {
+        errors.push(`${customerData.name}: ${e.message || 'Onbekende fout'}`);
+      }
+    }
+    
+    return { success, errors };
+  },
+
   updateCustomerStatus: async (id: string, status: string): Promise<void> => {
      await updateDoc(doc(db, 'customers', id), { status });
   },
