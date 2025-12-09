@@ -1,0 +1,136 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Helper function: check if user is authenticated
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    // Helper function: check if user is admin
+    function isAdmin() {
+      return isAuthenticated() && 
+             exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+             get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'ADMIN';
+    }
+    
+    // Helper function: check if user is editor or admin
+    function isEditorOrAdmin() {
+      return isAuthenticated() && 
+             exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+             get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['EDITOR', 'ADMIN'];
+    }
+    
+    // Helper function: check if user is owner
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+    
+    // Users collection
+    match /users/{userId} {
+      // Users can read their own document
+      allow read: if isOwner(userId);
+      
+      // Admins can read all users
+      allow read: if isAdmin();
+      
+      // Users can create their own document (during registration)
+      allow create: if isOwner(userId);
+      
+      // Users can update their own document (limited fields)
+      allow update: if isOwner(userId) && 
+                     request.resource.data.diff(resource.data).affectedKeys()
+                     .hasOnly(['name', 'avatarUrl', 'department']);
+      
+      // Admins can create, update, and delete any user
+      allow create, update, delete: if isAdmin();
+    }
+    
+    // Customers collection
+    match /customers/{customerId} {
+      // Authenticated users can read all customers
+      allow read: if isAuthenticated();
+      
+      // Editors and Admins can create/update
+      allow create, update: if isEditorOrAdmin();
+      
+      // Only Admins can delete
+      allow delete: if isAdmin();
+    }
+    
+    // OrganisatieProfielen collection
+    match /organisatieProfielen/{profielId} {
+      // Authenticated users can read all profiles
+      allow read: if isAuthenticated();
+      
+      // Editors and Admins can create/update
+      allow create, update: if isEditorOrAdmin();
+      
+      // Only Admins can delete
+      allow delete: if isAdmin();
+    }
+    
+    // Documents collection (Kennisbank)
+    match /documents/{documentId} {
+      // Authenticated users can read all documents
+      allow read: if isAuthenticated();
+      
+      // Editors and Admins can create/update
+      allow create, update: if isEditorOrAdmin();
+      
+      // Only Admins can delete
+      allow delete: if isAdmin();
+    }
+    
+    // Prompts collection
+    match /prompts/{promptId} {
+      // Authenticated users can read all prompts
+      allow read: if isAuthenticated();
+      
+      // Only Admins can create/update/delete
+      allow create, update, delete: if isAdmin();
+    }
+    
+    // PromptTypes collection
+    match /promptTypes/{typeId} {
+      // Authenticated users can read all types
+      allow read: if isAuthenticated();
+      
+      // Only Admins can create/update/delete
+      allow create, update, delete: if isAdmin();
+    }
+    
+    // RichtingLocaties collection
+    match /richtingLocaties/{locatieId} {
+      // Authenticated users can read all locations
+      allow read: if isAuthenticated();
+      
+      // Only Admins can create/update/delete
+      allow create, update, delete: if isAdmin();
+    }
+    
+    // AnalyseProgress collection (for stapsgewijze analyse)
+    match /analyseProgress/{progressId} {
+      // Authenticated users can read their own progress
+      allow read: if isAuthenticated() && 
+                   resource.data.userId == request.auth.uid;
+      
+      // Users can create their own progress
+      allow create: if isAuthenticated() && 
+                     request.resource.data.userId == request.auth.uid;
+      
+      // Users can update their own progress
+      allow update: if isAuthenticated() && 
+                     resource.data.userId == request.auth.uid;
+      
+      // Admins can read/update all progress
+      allow read, update: if isAdmin();
+    }
+    
+    // Default: deny all other access
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
+

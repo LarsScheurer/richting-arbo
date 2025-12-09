@@ -125,6 +125,69 @@ export const authService = {
       console.error("Error deleting user:", e);
       throw e;
     }
+  },
+
+  createUserByAdmin: async (email: string, name: string, role: UserRole): Promise<User> => {
+    try {
+      // Generate a temporary password (user will reset it)
+      const tempPassword = `Temp${Math.random().toString(36).slice(-12)}!`;
+      
+      // Create user in Firebase Auth
+      const userCredential = await createUserWithEmailAndPassword(auth, email, tempPassword);
+      const uid = userCredential.user.uid;
+      
+      // Create user document in Firestore
+      const newUser: User = {
+        id: uid,
+        email,
+        name,
+        role,
+        avatarUrl: `https://ui-avatars.com/api/?name=${encodeURIComponent(name)}&background=random`,
+        department: 'General'
+      };
+
+      await setDoc(doc(db, 'users', uid), cleanData(newUser));
+      
+      // Send password reset email so user can set their own password
+      await sendPasswordResetEmail(auth, email);
+      
+      return newUser;
+    } catch (e: any) {
+      console.error("Error creating user:", e);
+      if (e.code === 'auth/email-already-in-use') {
+        throw new Error('Dit e-mailadres is al in gebruik.');
+      }
+      throw new Error(`Fout bij aanmaken gebruiker: ${e.message}`);
+    }
+  },
+
+  updateUser: async (userId: string, updates: { name?: string; email?: string; role?: UserRole }): Promise<void> => {
+    try {
+      const userDocRef = doc(db, 'users', userId);
+      const updateData: any = {};
+      
+      if (updates.name !== undefined) {
+        updateData.name = updates.name;
+        // Update avatar URL if name changes
+        updateData.avatarUrl = `https://ui-avatars.com/api/?name=${encodeURIComponent(updates.name)}&background=random`;
+      }
+      
+      if (updates.role !== undefined) {
+        updateData.role = updates.role;
+      }
+      
+      // Note: Email changes in Firebase Auth require special handling
+      // For now, we only update the Firestore document
+      // Email changes in Auth should be done separately if needed
+      if (updates.email !== undefined) {
+        updateData.email = updates.email;
+      }
+      
+      await updateDoc(userDocRef, cleanData(updateData));
+    } catch (e: any) {
+      console.error("Error updating user:", e);
+      throw new Error(`Fout bij bijwerken gebruiker: ${e.message}`);
+    }
   }
 };
 
@@ -1298,6 +1361,37 @@ export const richtingLocatiesService = {
     // For now, return a placeholder
     console.log('Seed locaties - implementatie nodig');
     throw new Error('Seed locaties functie moet nog geïmplementeerd worden');
+  },
+
+  addLocatie: async (locatie: Omit<RichtingLocatie, 'id'>): Promise<RichtingLocatie> => {
+    try {
+      const locatiesRef = collection(db, 'richtingLocaties');
+      const docRef = await addDoc(locatiesRef, cleanData(locatie));
+      return { id: docRef.id, ...locatie };
+    } catch (error) {
+      console.error('Error adding richting locatie:', error);
+      throw error;
+    }
+  },
+
+  updateLocatie: async (locatieId: string, updates: Partial<RichtingLocatie>): Promise<void> => {
+    try {
+      const locatieRef = doc(db, 'richtingLocaties', locatieId);
+      await updateDoc(locatieRef, cleanData(updates));
+    } catch (error) {
+      console.error('Error updating richting locatie:', error);
+      throw error;
+    }
+  },
+
+  deleteLocatie: async (locatieId: string): Promise<void> => {
+    try {
+      const locatieRef = doc(db, 'richtingLocaties', locatieId);
+      await deleteDoc(locatieRef);
+    } catch (error) {
+      console.error('Error deleting richting locatie:', error);
+      throw error;
+    }
   }
 };
 
@@ -1313,5 +1407,9 @@ export interface RichtingLocatie {
   id: string;
   vestiging: string;
   stad: string;
+  regio?: string;
   adres?: string;
+  volledigAdres?: string;
+  latitude?: number;
+  longitude?: number;
 }

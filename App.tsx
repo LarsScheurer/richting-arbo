@@ -3289,8 +3289,34 @@ const SettingsView = ({ user }: { user: User }) => {
   const [editingTypeLabel, setEditingTypeLabel] = useState('');
   const [showPromptEditor, setShowPromptEditor] = useState(false);
   const [uploadingFile, setUploadingFile] = useState(false);
-  const [seedingLocaties, setSeedingLocaties] = useState(false);
+  const [viewingFile, setViewingFile] = useState<{name: string, content: string} | null>(null);
   const [richtingLocaties, setRichtingLocaties] = useState<RichtingLocatie[]>([]);
+  
+  // Locatie management state
+  const [showAddLocatieModal, setShowAddLocatieModal] = useState(false);
+  const [editingLocatie, setEditingLocatie] = useState<RichtingLocatie | null>(null);
+  const [newLocatieVestiging, setNewLocatieVestiging] = useState('');
+  const [newLocatieStad, setNewLocatieStad] = useState('');
+  const [newLocatieRegio, setNewLocatieRegio] = useState('');
+  const [newLocatieAdres, setNewLocatieAdres] = useState('');
+  const [newLocatieVolledigAdres, setNewLocatieVolledigAdres] = useState('');
+  const [newLocatieLatitude, setNewLocatieLatitude] = useState('');
+  const [newLocatieLongitude, setNewLocatieLongitude] = useState('');
+  const [savingLocatie, setSavingLocatie] = useState(false);
+  
+  // User management state
+  const [showAddUserModal, setShowAddUserModal] = useState(false);
+  const [newUserName, setNewUserName] = useState('');
+  const [newUserEmail, setNewUserEmail] = useState('');
+  const [newUserRole, setNewUserRole] = useState<UserRole>(UserRole.EDITOR);
+  const [creatingUser, setCreatingUser] = useState(false);
+  
+  // Edit user state
+  const [editingUser, setEditingUser] = useState<User | null>(null);
+  const [editUserName, setEditUserName] = useState('');
+  const [editUserEmail, setEditUserEmail] = useState('');
+  const [editUserRole, setEditUserRole] = useState<UserRole>(UserRole.EDITOR);
+  const [updatingUser, setUpdatingUser] = useState(false);
 
   useEffect(() => {
     const loadData = async () => {
@@ -3327,28 +3353,6 @@ const SettingsView = ({ user }: { user: User }) => {
     loadData();
   }, []);
 
-  const handleSeedRichtingLocaties = async () => {
-    if (!window.confirm('Weet je zeker dat je de Richting locaties wilt seeden? Dit voegt 23 locaties toe aan Firestore.')) {
-      return;
-    }
-
-    setSeedingLocaties(true);
-    try {
-      await richtingLocatiesService.seedLocaties();
-      const updatedLocaties = await richtingLocatiesService.getAllLocaties();
-      setRichtingLocaties(updatedLocaties);
-      alert(`✅ Succesvol! ${updatedLocaties.length} Richting locaties zijn toegevoegd.`);
-    } catch (error: any) {
-      console.error("Error seeding richting locaties:", error);
-      if (error.message?.includes('already exists') || error.code === 'already-exists') {
-        alert('⚠️ Locaties bestaan al. Als je opnieuw wilt seeden, verwijder eerst de collection in Firebase Console.');
-      } else {
-        alert(`❌ Fout bij seeden: ${error.message || 'Onbekende fout'}`);
-      }
-    } finally {
-      setSeedingLocaties(false);
-    }
-  };
 
   const handleRoleChange = async (userId: string, newRole: UserRole) => {
     try {
@@ -3360,6 +3364,87 @@ const SettingsView = ({ user }: { user: User }) => {
     } catch (error) {
       console.error("Error updating user role:", error);
       alert("Fout bij het bijwerken van de rol. Probeer het opnieuw.");
+    }
+  };
+
+  const handleAddUser = async () => {
+    if (!newUserName || !newUserEmail) {
+      alert('Vul naam en e-mailadres in');
+      return;
+    }
+
+    // Basic email validation
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(newUserEmail)) {
+      alert('Voer een geldig e-mailadres in');
+      return;
+    }
+
+    setCreatingUser(true);
+    try {
+      const newUser = await authService.createUserByAdmin(newUserEmail, newUserName, newUserRole);
+      const updatedUsers = await authService.getAllUsers();
+      setUsers(updatedUsers);
+      setShowAddUserModal(false);
+      setNewUserName('');
+      setNewUserEmail('');
+      setNewUserRole(UserRole.EDITOR);
+      alert(`✅ Gebruiker "${newUserName}" is aangemaakt!\n\nEen wachtwoord reset email is verzonden naar ${newUserEmail}. De gebruiker kan hiermee een eigen wachtwoord instellen.`);
+    } catch (error: any) {
+      console.error("Error creating user:", error);
+      alert(`❌ Fout bij aanmaken gebruiker: ${error.message || 'Onbekende fout'}`);
+    } finally {
+      setCreatingUser(false);
+    }
+  };
+
+  const handleEditUser = (user: User) => {
+    setEditingUser(user);
+    setEditUserName(user.name);
+    setEditUserEmail(user.email);
+    setEditUserRole(user.role);
+  };
+
+  const handleUpdateUser = async () => {
+    if (!editingUser) return;
+    
+    if (!editUserName || !editUserEmail) {
+      alert('Vul naam en e-mailadres in');
+      return;
+    }
+
+    // Basic email validation
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(editUserEmail)) {
+      alert('Voer een geldig e-mailadres in');
+      return;
+    }
+
+    setUpdatingUser(true);
+    try {
+      await authService.updateUser(editingUser.id, {
+        name: editUserName,
+        email: editUserEmail,
+        role: editUserRole
+      });
+      
+      const updatedUsers = await authService.getAllUsers();
+      setUsers(updatedUsers);
+      setEditingUser(null);
+      setEditUserName('');
+      setEditUserEmail('');
+      setEditUserRole(UserRole.EDITOR);
+      alert('✅ Gebruiker bijgewerkt!');
+      
+      // Reload if current user was edited
+      if (user.id === editingUser.id) {
+        window.location.reload();
+      }
+    } catch (error: any) {
+      console.error("Error updating user:", error);
+      alert(`❌ Fout: ${error.message || 'Onbekende fout'}`);
+    } finally {
+      setUpdatingUser(false);
     }
   };
 
@@ -3447,15 +3532,35 @@ const SettingsView = ({ user }: { user: User }) => {
       reader.onload = async (e) => {
         const content = e.target?.result as string;
         await promptService.addFileToPrompt(promptId, file.name, content);
+        
+        // Update selectedPrompt to show the new file immediately
+        const updatedPrompt = await promptService.getPrompt(promptId);
+        if (updatedPrompt) {
+          setSelectedPrompt(updatedPrompt);
+        }
+        
+        // Update prompts list
         const updatedPrompts = await promptService.getPrompts();
         setPrompts(updatedPrompts);
+        
+        // Reset file input so same file can be selected again
+        event.target.value = '';
+        
         setUploadingFile(false);
+        alert(`✅ Bestand "${file.name}" succesvol toegevoegd!`);
+      };
+      reader.onerror = () => {
+        console.error("Error reading file");
+        alert("Fout bij het lezen van het bestand.");
+        setUploadingFile(false);
+        event.target.value = '';
       };
       reader.readAsText(file);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error uploading file:", error);
-      alert("Fout bij het uploaden van het bestand.");
+      alert(`❌ Fout bij het uploaden van het bestand: ${error.message || 'Onbekende fout'}`);
       setUploadingFile(false);
+      event.target.value = '';
     }
   };
 
@@ -3535,15 +3640,177 @@ const SettingsView = ({ user }: { user: User }) => {
           <div className="flex justify-between items-center mb-6">
             <h3 className="text-lg font-bold text-slate-900">Gebruikers</h3>
             <button
-              onClick={() => {
-                // TODO: Implement user creation modal
-                alert('Gebruiker toevoegen functie komt binnenkort');
-              }}
+              onClick={() => setShowAddUserModal(true)}
               className="bg-richting-orange text-white px-4 py-2 rounded-lg font-bold hover:bg-orange-600 transition-colors"
             >
               + Toevoegen
             </button>
           </div>
+
+          {/* Add User Modal */}
+          {showAddUserModal && (
+            <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+              <div className="bg-white rounded-xl shadow-xl p-6 w-full max-w-md">
+                <div className="flex justify-between items-center mb-4">
+                  <h3 className="text-lg font-bold text-slate-900">Nieuwe Gebruiker Toevoegen</h3>
+                  <button
+                    onClick={() => {
+                      setShowAddUserModal(false);
+                      setNewUserName('');
+                      setNewUserEmail('');
+                      setNewUserRole(UserRole.EDITOR);
+                    }}
+                    className="text-gray-400 hover:text-gray-600 text-2xl font-bold"
+                  >
+                    ×
+                  </button>
+                </div>
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">Naam</label>
+                    <input
+                      type="text"
+                      value={newUserName}
+                      onChange={(e) => setNewUserName(e.target.value)}
+                      placeholder="Bijv. Jan Jansen"
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-richting-orange focus:border-richting-orange"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">E-mailadres</label>
+                    <input
+                      type="email"
+                      value={newUserEmail}
+                      onChange={(e) => setNewUserEmail(e.target.value)}
+                      placeholder="bijv. jan@richting.nl"
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-richting-orange focus:border-richting-orange"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">Rol</label>
+                    <select
+                      value={newUserRole}
+                      onChange={(e) => setNewUserRole(e.target.value as UserRole)}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-richting-orange focus:border-richting-orange"
+                    >
+                      <option value={UserRole.ADMIN}>Admin</option>
+                      <option value={UserRole.EDITOR}>Editor</option>
+                      <option value={UserRole.READER}>Reader</option>
+                    </select>
+                  </div>
+                  <div className="bg-blue-50 border-l-4 border-blue-500 p-3 rounded">
+                    <p className="text-sm text-blue-700">
+                      <strong>Let op:</strong> Na het aanmaken wordt automatisch een wachtwoord reset email verzonden. De gebruiker kan hiermee een eigen wachtwoord instellen.
+                    </p>
+                  </div>
+                  <div className="flex gap-3 pt-2">
+                    <button
+                      onClick={handleAddUser}
+                      disabled={creatingUser}
+                      className="flex-1 bg-richting-orange text-white px-4 py-2 rounded-lg font-bold hover:bg-orange-600 disabled:opacity-50 transition-colors"
+                    >
+                      {creatingUser ? 'Aanmaken...' : 'Gebruiker Aanmaken'}
+                    </button>
+                    <button
+                      onClick={() => {
+                        setShowAddUserModal(false);
+                        setNewUserName('');
+                        setNewUserEmail('');
+                        setNewUserRole(UserRole.EDITOR);
+                      }}
+                      disabled={creatingUser}
+                      className="bg-gray-200 text-gray-700 px-4 py-2 rounded-lg font-bold hover:bg-gray-300 disabled:opacity-50 transition-colors"
+                    >
+                      Annuleren
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Edit User Modal */}
+          {editingUser && (
+            <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+              <div className="bg-white rounded-xl shadow-xl p-6 w-full max-w-md">
+                <div className="flex justify-between items-center mb-4">
+                  <h3 className="text-lg font-bold text-slate-900">Gebruiker Bewerken</h3>
+                  <button
+                    onClick={() => {
+                      setEditingUser(null);
+                      setEditUserName('');
+                      setEditUserEmail('');
+                      setEditUserRole(UserRole.EDITOR);
+                    }}
+                    className="text-gray-400 hover:text-gray-600 text-2xl font-bold"
+                  >
+                    ×
+                  </button>
+                </div>
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">Naam</label>
+                    <input
+                      type="text"
+                      value={editUserName}
+                      onChange={(e) => setEditUserName(e.target.value)}
+                      placeholder="Bijv. Jan Jansen"
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-richting-orange focus:border-richting-orange"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">E-mailadres</label>
+                    <input
+                      type="email"
+                      value={editUserEmail}
+                      onChange={(e) => setEditUserEmail(e.target.value)}
+                      placeholder="bijv. jan@richting.nl"
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-richting-orange focus:border-richting-orange"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">Rol</label>
+                    <select
+                      value={editUserRole}
+                      onChange={(e) => setEditUserRole(e.target.value as UserRole)}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-richting-orange focus:border-richting-orange"
+                    >
+                      <option value={UserRole.ADMIN}>Admin</option>
+                      <option value={UserRole.EDITOR}>Editor</option>
+                      <option value={UserRole.READER}>Reader</option>
+                    </select>
+                  </div>
+                  <div className="bg-yellow-50 border-l-4 border-yellow-500 p-3 rounded">
+                    <p className="text-sm text-yellow-700">
+                      <strong>Let op:</strong> E-mailadres wijzigingen worden alleen in Firestore opgeslagen. Voor wijzigingen in Firebase Authentication is extra configuratie nodig.
+                    </p>
+                  </div>
+                  <div className="flex gap-3 pt-2">
+                    <button
+                      onClick={handleUpdateUser}
+                      disabled={updatingUser}
+                      className="flex-1 bg-richting-orange text-white px-4 py-2 rounded-lg font-bold hover:bg-orange-600 disabled:opacity-50 transition-colors"
+                    >
+                      {updatingUser ? 'Bijwerken...' : 'Opslaan'}
+                    </button>
+                    <button
+                      onClick={() => {
+                        setEditingUser(null);
+                        setEditUserName('');
+                        setEditUserEmail('');
+                        setEditUserRole(UserRole.EDITOR);
+                      }}
+                      disabled={updatingUser}
+                      className="bg-gray-200 text-gray-700 px-4 py-2 rounded-lg font-bold hover:bg-gray-300 disabled:opacity-50 transition-colors"
+                    >
+                      Annuleren
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
           <div className="space-y-4">
             {users.length === 0 ? (
               <div className="text-center py-10 text-gray-500">
@@ -3571,10 +3838,7 @@ const SettingsView = ({ user }: { user: User }) => {
                   </div>
                   <div className="flex items-center gap-2 ml-4">
                     <button
-                      onClick={() => {
-                        // TODO: Implement user edit modal
-                        alert('Gebruiker bewerken functie komt binnenkort');
-                      }}
+                      onClick={() => handleEditUser(u)}
                       className="bg-blue-600 text-white px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-blue-700 transition-colors"
                     >
                       Bewerken
@@ -3745,19 +4009,28 @@ const SettingsView = ({ user }: { user: User }) => {
                     <label className="block text-sm font-medium text-gray-700 mb-2">Bijgevoegde Bestanden</label>
                     <div className="space-y-2">
                       {selectedPrompt.files.map(file => (
-                        <div key={file.id} className="flex items-center justify-between p-2 bg-gray-50 rounded border">
-                          <span className="text-sm text-gray-700">{file.name}</span>
+                        <div key={file.id} className="flex items-center justify-between p-2 bg-gray-50 rounded border hover:bg-gray-100 transition-colors">
+                          <button
+                            onClick={() => setViewingFile({ name: file.name, content: file.content })}
+                            className="flex-1 text-left text-sm text-blue-600 hover:text-blue-800 hover:underline font-medium"
+                          >
+                            📄 {file.name}
+                          </button>
                           <button
                             onClick={async () => {
                               if (selectedPrompt) {
+                                if (!window.confirm(`Weet je zeker dat je "${file.name}" wilt verwijderen?`)) {
+                                  return;
+                                }
                                 await promptService.deleteFileFromPrompt(selectedPrompt.id, file.id);
                                 const updated = await promptService.getPrompt(selectedPrompt.id);
                                 if (updated) setSelectedPrompt(updated);
                                 const allPrompts = await promptService.getPrompts();
                                 setPrompts(allPrompts);
+                                alert('✅ Bestand verwijderd');
                               }
                             }}
-                            className="text-red-500 hover:text-red-700 text-sm"
+                            className="text-red-500 hover:text-red-700 text-sm ml-2 px-2 py-1 rounded hover:bg-red-50 transition-colors"
                           >
                             Verwijderen
                           </button>
@@ -3891,6 +4164,52 @@ const SettingsView = ({ user }: { user: User }) => {
                     );
                   })
               )}
+            </div>
+          )}
+
+          {/* File Viewer Modal */}
+          {viewingFile && (
+            <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+              <div className="bg-white rounded-xl shadow-xl p-6 w-full max-w-4xl max-h-[90vh] flex flex-col">
+                <div className="flex justify-between items-center mb-4">
+                  <h3 className="text-lg font-bold text-slate-900">📄 {viewingFile.name}</h3>
+                  <button
+                    onClick={() => setViewingFile(null)}
+                    className="text-gray-400 hover:text-gray-600 text-2xl font-bold"
+                  >
+                    ×
+                  </button>
+                </div>
+                <div className="flex-1 overflow-auto border border-gray-200 rounded-lg bg-gray-50">
+                  <pre className="p-4 text-sm text-gray-800 whitespace-pre-wrap font-mono overflow-auto max-h-[70vh]">
+                    {viewingFile.content}
+                  </pre>
+                </div>
+                <div className="flex gap-3 mt-4">
+                  <button
+                    onClick={() => {
+                      const blob = new Blob([viewingFile.content], { type: 'text/plain' });
+                      const url = URL.createObjectURL(blob);
+                      const a = document.createElement('a');
+                      a.href = url;
+                      a.download = viewingFile.name;
+                      document.body.appendChild(a);
+                      a.click();
+                      document.body.removeChild(a);
+                      URL.revokeObjectURL(url);
+                    }}
+                    className="bg-blue-600 text-white px-4 py-2 rounded-lg font-bold hover:bg-blue-700 transition-colors"
+                  >
+                    📥 Downloaden
+                  </button>
+                  <button
+                    onClick={() => setViewingFile(null)}
+                    className="bg-gray-200 text-gray-700 px-4 py-2 rounded-lg font-bold hover:bg-gray-300 transition-colors"
+                  >
+                    Sluiten
+                  </button>
+                </div>
+              </div>
             </div>
           )}
         </div>
@@ -4047,69 +4366,264 @@ const SettingsView = ({ user }: { user: User }) => {
 
       {/* Data Beheer Tab */}
       {activeTab === 'databeheer' && (
-        <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
-          <div className="flex justify-between items-center mb-6">
-            <h3 className="text-lg font-bold text-slate-900">Imports</h3>
-            <button
-              onClick={() => {
-                // TODO: Implement import creation
-                alert('Import toevoegen functie komt binnenkort');
-              }}
-              className="bg-richting-orange text-white px-4 py-2 rounded-lg font-bold hover:bg-orange-600 transition-colors"
-            >
-              + Toevoegen
-            </button>
-          </div>
-          <div className="space-y-4">
-            {/* Placeholder for imports list - TODO: Implement actual imports tracking */}
-            <div className="text-center py-10 text-gray-500">
-              <p>Nog geen imports gevonden.</p>
-              <p className="text-xs text-gray-400 mt-2">Import functionaliteit komt binnenkort beschikbaar.</p>
+        <div className="space-y-6">
+          {/* Richting Locaties Section */}
+          <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+            <div className="flex justify-between items-center mb-6">
+              <h3 className="text-lg font-bold text-slate-900">Richting Locaties</h3>
+              <button
+                onClick={() => {
+                  setEditingLocatie(null);
+                  setNewLocatieVestiging('');
+                  setNewLocatieStad('');
+                  setNewLocatieRegio('');
+                  setNewLocatieAdres('');
+                  setNewLocatieVolledigAdres('');
+                  setNewLocatieLatitude('');
+                  setNewLocatieLongitude('');
+                  setShowAddLocatieModal(true);
+                }}
+                className="bg-richting-orange text-white px-4 py-2 rounded-lg font-bold hover:bg-orange-600 transition-colors"
+              >
+                + Toevoegen
+              </button>
             </div>
-            
-            {/* Richting Locaties Section (temporary) */}
-            <div className="mt-8 pt-8 border-t border-gray-200">
-              <div className="flex justify-between items-center mb-4">
-                <h4 className="text-md font-bold text-slate-700">Richting Locaties Database</h4>
+            <div className="space-y-4">
+              {richtingLocaties.length === 0 ? (
+                <div className="text-center py-10 text-gray-500">
+                  <p>Nog geen locaties gevonden.</p>
+                </div>
+              ) : (
+                richtingLocaties.map(loc => (
+                  <div key={loc.id} className="flex items-center justify-between p-4 border border-gray-200 rounded-lg hover:border-richting-orange transition-colors">
+                    <div className="flex-1">
+                      <p className="font-bold text-slate-900">{loc.vestiging}</p>
+                      <p className="text-sm text-gray-500">{loc.stad}</p>
+                      {loc.regio && (
+                        <p className="text-xs text-gray-400 mt-1">Regio: {loc.regio}</p>
+                      )}
+                      {loc.volledigAdres && (
+                        <p className="text-xs text-gray-400 mt-1">{loc.volledigAdres}</p>
+                      )}
+                      {loc.latitude && loc.longitude && (
+                        <p className="text-xs text-gray-400 mt-1">
+                          📍 {loc.latitude.toFixed(4)}, {loc.longitude.toFixed(4)}
+                        </p>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-2 ml-4">
+                      <button
+                        onClick={() => {
+                          setEditingLocatie(loc);
+                          setNewLocatieVestiging(loc.vestiging);
+                          setNewLocatieStad(loc.stad);
+                          setNewLocatieRegio(loc.regio || '');
+                          setNewLocatieAdres(loc.adres || '');
+                          setNewLocatieVolledigAdres(loc.volledigAdres || '');
+                          setNewLocatieLatitude(loc.latitude?.toString() || '');
+                          setNewLocatieLongitude(loc.longitude?.toString() || '');
+                          setShowAddLocatieModal(true);
+                        }}
+                        className="bg-blue-600 text-white px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-blue-700 transition-colors"
+                      >
+                        Bewerken
+                      </button>
+                      <button
+                        onClick={async () => {
+                          if (!window.confirm(`Weet je zeker dat je locatie "${loc.vestiging}" wilt verwijderen?`)) {
+                            return;
+                          }
+                          try {
+                            await richtingLocatiesService.deleteLocatie(loc.id);
+                            const updatedLocaties = await richtingLocatiesService.getAllLocaties();
+                            setRichtingLocaties(updatedLocaties);
+                            alert('✅ Locatie verwijderd');
+                          } catch (error: any) {
+                            alert(`❌ Fout: ${error.message || 'Onbekende fout'}`);
+                          }
+                        }}
+                        className="bg-red-600 text-white px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-red-700 transition-colors"
+                      >
+                        Verwijderen
+                      </button>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Add/Edit Locatie Modal */}
+      {(showAddLocatieModal || editingLocatie) && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-xl shadow-xl p-6 w-full max-w-md max-h-[90vh] overflow-y-auto">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-lg font-bold text-slate-900">
+                {editingLocatie ? 'Locatie Bewerken' : 'Nieuwe Locatie Toevoegen'}
+              </h3>
+              <button
+                onClick={() => {
+                  setShowAddLocatieModal(false);
+                  setEditingLocatie(null);
+                  setNewLocatieVestiging('');
+                  setNewLocatieStad('');
+                  setNewLocatieRegio('');
+                  setNewLocatieAdres('');
+                  setNewLocatieVolledigAdres('');
+                  setNewLocatieLatitude('');
+                  setNewLocatieLongitude('');
+                }}
+                className="text-gray-400 hover:text-gray-600 text-2xl font-bold"
+              >
+                ×
+              </button>
+            </div>
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Vestiging *</label>
+                <input
+                  type="text"
+                  value={newLocatieVestiging}
+                  onChange={(e) => setNewLocatieVestiging(e.target.value)}
+                  placeholder="Bijv. Hoofdkantoor Amsterdam"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-richting-orange focus:border-richting-orange"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Stad *</label>
+                <input
+                  type="text"
+                  value={newLocatieStad}
+                  onChange={(e) => setNewLocatieStad(e.target.value)}
+                  placeholder="Bijv. Amsterdam"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-richting-orange focus:border-richting-orange"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Regio</label>
+                <input
+                  type="text"
+                  value={newLocatieRegio}
+                  onChange={(e) => setNewLocatieRegio(e.target.value)}
+                  placeholder="Bijv. Noord-Holland"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-richting-orange focus:border-richting-orange"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Adres</label>
+                <input
+                  type="text"
+                  value={newLocatieAdres}
+                  onChange={(e) => setNewLocatieAdres(e.target.value)}
+                  placeholder="Bijv. Damrak 1"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-richting-orange focus:border-richting-orange"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Volledig Adres</label>
+                <input
+                  type="text"
+                  value={newLocatieVolledigAdres}
+                  onChange={(e) => setNewLocatieVolledigAdres(e.target.value)}
+                  placeholder="Bijv. Damrak 1, 1012 LG Amsterdam"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-richting-orange focus:border-richting-orange"
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Latitude</label>
+                  <input
+                    type="number"
+                    step="any"
+                    value={newLocatieLatitude}
+                    onChange={(e) => setNewLocatieLatitude(e.target.value)}
+                    placeholder="52.3676"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-richting-orange focus:border-richting-orange"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Longitude</label>
+                  <input
+                    type="number"
+                    step="any"
+                    value={newLocatieLongitude}
+                    onChange={(e) => setNewLocatieLongitude(e.target.value)}
+                    placeholder="4.9041"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-richting-orange focus:border-richting-orange"
+                  />
+                </div>
+              </div>
+              <div className="flex gap-3 pt-2">
                 <button
-                  onClick={handleSeedRichtingLocaties}
-                  disabled={seedingLocaties}
-                  className="bg-richting-orange text-white px-4 py-2 rounded-lg font-bold hover:bg-orange-600 disabled:opacity-50 transition-colors flex items-center gap-2 text-sm"
+                  onClick={async () => {
+                    if (!newLocatieVestiging || !newLocatieStad) {
+                      alert('Vul minimaal vestiging en stad in');
+                      return;
+                    }
+
+                    setSavingLocatie(true);
+                    try {
+                      const locatieData: Partial<RichtingLocatie> = {
+                        vestiging: newLocatieVestiging,
+                        stad: newLocatieStad,
+                        regio: newLocatieRegio || undefined,
+                        adres: newLocatieAdres || undefined,
+                        volledigAdres: newLocatieVolledigAdres || undefined,
+                        latitude: newLocatieLatitude ? parseFloat(newLocatieLatitude) : undefined,
+                        longitude: newLocatieLongitude ? parseFloat(newLocatieLongitude) : undefined
+                      };
+
+                      if (editingLocatie) {
+                        await richtingLocatiesService.updateLocatie(editingLocatie.id, locatieData);
+                        alert('✅ Locatie bijgewerkt!');
+                      } else {
+                        await richtingLocatiesService.addLocatie(locatieData as Omit<RichtingLocatie, 'id'>);
+                        alert('✅ Locatie toegevoegd!');
+                      }
+
+                      const updatedLocaties = await richtingLocatiesService.getAllLocaties();
+                      setRichtingLocaties(updatedLocaties);
+                      setShowAddLocatieModal(false);
+                      setEditingLocatie(null);
+                      setNewLocatieVestiging('');
+                      setNewLocatieStad('');
+                      setNewLocatieRegio('');
+                      setNewLocatieAdres('');
+                      setNewLocatieVolledigAdres('');
+                      setNewLocatieLatitude('');
+                      setNewLocatieLongitude('');
+                    } catch (error: any) {
+                      console.error("Error saving locatie:", error);
+                      alert(`❌ Fout: ${error.message || 'Onbekende fout'}`);
+                    } finally {
+                      setSavingLocatie(false);
+                    }
+                  }}
+                  disabled={savingLocatie}
+                  className="flex-1 bg-richting-orange text-white px-4 py-2 rounded-lg font-bold hover:bg-orange-600 disabled:opacity-50 transition-colors"
                 >
-                  {seedingLocaties ? (
-                    <>
-                      <span className="animate-spin">⏳</span> Seeden...
-                    </>
-                  ) : (
-                    <>
-                      🌱 Seed Locaties
-                    </>
-                  )}
+                  {savingLocatie ? 'Opslaan...' : 'Opslaan'}
+                </button>
+                <button
+                  onClick={() => {
+                    setShowAddLocatieModal(false);
+                    setEditingLocatie(null);
+                    setNewLocatieVestiging('');
+                    setNewLocatieStad('');
+                    setNewLocatieRegio('');
+                    setNewLocatieAdres('');
+                    setNewLocatieVolledigAdres('');
+                    setNewLocatieLatitude('');
+                    setNewLocatieLongitude('');
+                  }}
+                  disabled={savingLocatie}
+                  className="bg-gray-200 text-gray-700 px-4 py-2 rounded-lg font-bold hover:bg-gray-300 disabled:opacity-50 transition-colors"
+                >
+                  Annuleren
                 </button>
               </div>
-              <p className="text-sm text-gray-500 mb-4">
-                {richtingLocaties.length > 0 
-                  ? `${richtingLocaties.length} locaties geladen` 
-                  : 'Nog geen locaties in database'}
-              </p>
-              {richtingLocaties.length > 0 && (
-                <div className="max-h-96 overflow-y-auto space-y-2">
-                  {richtingLocaties.map(loc => (
-                    <div key={loc.id} className="p-3 bg-gray-50 rounded border border-gray-200">
-                      <div className="flex items-start justify-between">
-                        <div className="flex-1">
-                          <p className="font-bold text-slate-900 text-sm">{loc.vestiging}</p>
-                          <p className="text-xs text-gray-600 mt-1">{loc.regio}</p>
-                          <p className="text-xs text-gray-500 mt-1">{loc.volledigAdres}</p>
-                        </div>
-                        <div className="text-xs text-gray-400 ml-4">
-                          {loc.latitude.toFixed(4)}, {loc.longitude.toFixed(4)}
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
             </div>
           </div>
         </div>
