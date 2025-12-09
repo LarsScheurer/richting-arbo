@@ -16,9 +16,13 @@ function getFirestoreDb() {
         // Method 1: Try using the database() method on the Firestore instance (Admin SDK v12+)
         const firestoreInstance = admin.firestore();
         if (firestoreInstance.database && typeof firestoreInstance.database === 'function') {
-            const namedDb = firestoreInstance.database('richting01');
-            console.log('✅ Using named database: richting01 (method 1)');
-            return namedDb;
+            try {
+                const namedDb = firestoreInstance.database('richting01');
+                console.log('✅ Using named database: richting01 (method 1)');
+                return namedDb;
+            } catch (e) {
+                console.log('Method 1 failed:', e.message);
+            }
         }
         // Method 2: Try using app.firestore() with database name
         if (app.firestore && typeof app.firestore === 'function') {
@@ -28,29 +32,38 @@ function getFirestoreDb() {
                 return namedDb;
             }
             catch (e) {
-                console.log('Method 2 failed:', e);
+                console.log('Method 2 failed:', e.message);
             }
         }
-        // Method 3: Try direct Firestore constructor with database name
+        // Method 3: Try using getFirestore with database name (Admin SDK v11+)
         try {
-            // In some versions, you can pass the database name directly
-            const Firestore = require('@google-cloud/firestore').Firestore;
-            const namedDb = new Firestore({ databaseId: 'richting01' });
+            const namedDb = admin.firestore('richting01');
             console.log('✅ Using named database: richting01 (method 3)');
             return namedDb;
         }
         catch (e) {
-            console.log('Method 3 failed:', e);
+            console.log('Method 3 failed:', e.message);
         }
-        // Fallback: Use default database but log warning
-        console.warn('⚠️ Named database "richting01" not available, using default database. This may cause issues if prompts are stored in richting01.');
-        console.warn('⚠️ Make sure the prompts collection exists in the default database, or check Firebase Admin SDK version.');
-        return admin.firestore();
+        // Method 4: Try direct Firestore constructor with database name
+        try {
+            const Firestore = require('@google-cloud/firestore').Firestore;
+            const namedDb = new Firestore({ databaseId: 'richting01' });
+            console.log('✅ Using named database: richting01 (method 4)');
+            return namedDb;
+        }
+        catch (e) {
+            console.log('Method 4 failed:', e.message);
+        }
+        // CRITICAL: Do not fall back to default database
+        // Throw error instead to force fix
+        const error = new Error('CRITICAL: Could not access richting01 database. All methods failed. Do not use default database!');
+        console.error('❌', error.message);
+        throw error;
     }
     catch (error) {
         console.error('❌ Error accessing named database:', error);
-        // Still return default database as fallback
-        return admin.firestore();
+        // Do not return default database - throw error instead
+        throw new Error('CRITICAL: Cannot access richting01 database. Please check Firebase Admin SDK configuration.');
     }
 }
 // Set global options for v2 functions

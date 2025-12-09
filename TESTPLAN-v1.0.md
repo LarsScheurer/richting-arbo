@@ -9,23 +9,23 @@ Verificeren dat alle recente wijzigingen correct werken en de applicatie stabiel
 **Doel:** Verificeren dat alle tabs dezelfde structuur hebben
 
 #### 1.1 Autorisatie Tab
-- [ ] Tab is zichtbaar voor ADMIN gebruikers
-- [ ] Header toont "Gebruikers" met "+ Toevoegen" knop rechts
-- [ ] Lijst toont alle gebruikers met naam, email en rol
-- [ ] Elke gebruiker heeft "Bewerken" en "Verwijderen" knoppen
-- [ ] Rol kan worden aangepast via dropdown
-- [ ] "+ Toevoegen" knop werkt (of toont placeholder)
+- [x] Tab is zichtbaar voor ADMIN gebruikers
+- [x] Header toont "Gebruikers" met "+ Toevoegen" knop rechts
+- [x] Lijst toont alle gebruikers met naam, email en rol
+- [x] Elke gebruiker heeft "Bewerken" en "Verwijderen" knoppen
+- [x] Rol kan worden aangepast via dropdown
+- [x] "+ Toevoegen" knop werkt (of toont placeholder)
 
 #### 1.2 Promptbeheer Tab
-- [ ] Tab is zichtbaar voor ADMIN gebruikers
-- [ ] Header toont "Prompts" met "Exporteer", "Importeer" en "+ Toevoegen" knoppen
-- [ ] Prompts worden getoond, geordend op nummer (1, 2, 3...)
-- [ ] Geen grijze type labels zichtbaar (alleen versie en actief badges)
-- [ ] Elke prompt heeft "Bewerken" en "Verwijderen" knoppen
-- [ ] Inactieve prompts hebben "Activeer" knop
-- [ ] "+ Toevoegen" opent prompt editor
-- [ ] "Exporteer" exporteert prompts naar JSON
-- [ ] "Importeer" importeert prompts uit JSON
+- [x] Tab is zichtbaar voor ADMIN gebruikers
+- [x] Header toont "Prompts" met "Exporteer", "Importeer" en "+ Toevoegen" knoppen
+- [x] Prompts worden getoond, geordend op nummer (1, 2, 3...)
+- [x] Geen grijze type labels zichtbaar (alleen versie en actief badges)
+- [x] Elke prompt heeft "Bewerken" en "Verwijderen" knoppen
+- [x] Inactieve prompts hebben "Activeer" knop
+- [x] "+ Toevoegen" opent prompt editor
+- [x] "Exporteer" exporteert prompts naar JSON
+- [x] "Importeer" importeert prompts uit JSON
 
 #### 1.3 Databeheer Tab
 - [ ] Tab is zichtbaar voor ADMIN gebruikers
@@ -35,12 +35,12 @@ Verificeren dat alle recente wijzigingen correct werken en de applicatie stabiel
 - [ ] Locaties worden getoond na seeden
 
 #### 1.4 Typebeheer Tab
-- [ ] Tab is zichtbaar voor ADMIN gebruikers
-- [ ] Header toont "Types" met inputvelden en "+ Toevoegen" knop
-- [ ] Lijst toont alle prompt types met label en ID
-- [ ] Elke type heeft "Bewerken" en "Verwijderen" knoppen
-- [ ] "Bewerken" opent edit formulier
-- [ ] "+ Toevoegen" voegt nieuw type toe
+- [x] Tab is zichtbaar voor ADMIN gebruikers
+- [x] Header toont "Types" met inputvelden en "+ Toevoegen" knop
+- [x] Lijst toont alle prompt types met label en ID
+- [x] Elke type heeft "Bewerken" en "Verwijderen" knoppen
+- [x] "Bewerken" opent edit formulier
+- [x] "+ Toevoegen" voegt nieuw type toe
 
 ### 2. Prompt Functionaliteit ✅
 **Doel:** Verificeren dat promptbeheer correct werkt

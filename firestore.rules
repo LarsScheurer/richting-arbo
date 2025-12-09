@@ -32,7 +32,8 @@ service cloud.firestore {
       allow read: if isOwner(userId);
       
       // Admins can read all users
-      allow read: if isAdmin();
+      allow read: if isAdmin();Llafnp2025!
+      
       
       // Users can create their own document (during registration)
       allow create: if isOwner(userId);
