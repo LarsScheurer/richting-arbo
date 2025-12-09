@@ -737,10 +737,10 @@ export const promptService = {
         return types.filter(Boolean);
       }
       // Return default types if none exist
-      return ['publiek_organisatie_profiel', 'publiek_cultuur_profiel', 'other'];
+      return ['publiek_organisatie_profiel', 'publiek_cultuur_profiel', 'publiek_risico_profiel', 'other'];
     } catch (error) {
       console.error('Error getting prompt types:', error);
-      return ['publiek_organisatie_profiel', 'publiek_cultuur_profiel', 'other'];
+      return ['publiek_organisatie_profiel', 'publiek_cultuur_profiel', 'publiek_risico_profiel', 'other'];
     }
   },
   
@@ -753,6 +753,7 @@ export const promptService = {
       const defaultLabels: {[key: string]: string} = {
         'publiek_organisatie_profiel': 'Publiek Organisatie Profiel',
         'publiek_cultuur_profiel': 'Publiek Cultuur Profiel',
+        'publiek_risico_profiel': 'Publiek Risico Profiel',
         'other': 'Andere Prompts'
       };
       
@@ -1311,6 +1312,67 @@ BELANGRIJK: Geef het antwoord ALLEEN in puur, geldig JSON formaat. Geen markdown
 
 Analyseer de organisatiecultuur en genereer een volledig CultuurProfiel met de volgende JSON structuur. Zorg ervoor dat alle numerieke waarden (scores, percentages) daadwerkelijk worden ingevuld op basis van je analyse, niet op 0 blijven staan.`;
 
+      // Default Risico Profiel Prompt
+      const risicoPrompt = `Je bent Gemini, geconfigureerd als een deskundige RI&E (Risico Inventarisatie & Evaluatie) specialist voor Richting, een toonaangevende, gecertificeerde arbodienst in Nederland. Je primaire taak is het uitvoeren van een diepgaande risicoanalyse op basis van een door de gebruiker opgegeven organisatienaam en website.
+
+BELANGRIJK: Geef het antwoord ALLEEN in puur, geldig JSON formaat. Geen markdown, geen code blocks, geen extra tekst. Alleen de JSON object. Zorg dat alle string waarden correct ge-escaped zijn (newlines als \\n, quotes als \\"). De JSON moet direct parseerbaar zijn zonder enige bewerking.
+
+Analyseer de organisatie en identificeer alle processen, functies, gevaarlijke stoffen en risico's. Gebruik de Fine & Kinney methode voor risicoberekening.
+
+JSON STRUCTUUR:
+{
+  "processen": [
+    {
+      "name": "Naam van het proces",
+      "description": "Beschrijving van het proces",
+      "relatedFunctionIds": ["functionId1", "functionId2"],
+      "relatedSubstanceIds": ["substanceId1"]
+    }
+  ],
+  "functies": [
+    {
+      "name": "Naam van de functie",
+      "description": "Beschrijving van de functie",
+      "department": "Afdeling",
+      "fysiek": 1-5,
+      "psychisch": 1-5
+    }
+  ],
+  "stoffen": [
+    {
+      "name": "Naam van de stof",
+      "casNumber": "CAS nummer indien bekend",
+      "hazardPhrases": ["H300", "H315"],
+      "description": "Beschrijving"
+    }
+  ],
+  "risicos": [
+    {
+      "riskName": "Naam van het risico",
+      "description": "Beschrijving",
+      "category": "psychisch" | "fysiek" | "overige",
+      "probability": 0.5 | 1 | 3 | 6 | 10,
+      "effect": 1 | 3 | 7 | 15 | 40,
+      "exposure": 1-10,
+      "processId": "processId indien gekoppeld",
+      "functionId": "functionId indien gekoppeld",
+      "substanceId": "substanceId indien gekoppeld"
+    }
+  ]
+}
+
+FINE & KINNEY WAARDEN:
+- Probability (Kans/W): 0.5, 1, 3, 6, of 10
+- Effect (E): 1, 3, 7, 15, of 40
+- Exposure (Blootstelling/B): 1-10 (aantal personen)
+
+RISICO KOPPELINGEN:
+- Een risico kan gekoppeld zijn aan een proces, functie, stof, of combinaties
+- Bijvoorbeeld: een risico kan gekoppeld zijn aan een proces EN een stof (stof gebruikt tijdens proces)
+- Gebruik de ID's van de processen, functies en stoffen die je eerder in de JSON hebt gedefinieerd
+
+Zorg ervoor dat alle risico's correct worden gekoppeld aan de relevante processen, functies en/of stoffen.`;
+
       const now = new Date().toISOString();
       
       // Add default prompts
@@ -1320,6 +1382,7 @@ Analyseer de organisatiecultuur en genereer een volledig CultuurProfiel met de v
         const existingPrompts = existingSnapshot.docs.map(d => d.data());
         const hasPubliekOrganisatie = existingPrompts.some(p => p.type === 'publiek_organisatie_profiel' && p.versie === 1);
         const hasCultuur = existingPrompts.some(p => p.type === 'publiek_cultuur_profiel' && p.versie === 1);
+        const hasRisico = existingPrompts.some(p => p.type === 'publiek_risico_profiel' && p.versie === 1);
         
         if (!hasPubliekOrganisatie) {
           await addDoc(promptsRef, {
@@ -1344,8 +1407,20 @@ Analyseer de organisatiecultuur en genereer een volledig CultuurProfiel met de v
           });
           newPrompts.push('publiek_cultuur_profiel');
         }
+        
+        if (!hasRisico) {
+          await addDoc(promptsRef, {
+            type: 'publiek_risico_profiel',
+            promptTekst: risicoPrompt,
+            versie: 1,
+            isActief: true,
+            createdAt: now,
+            createdBy: userId
+          });
+          newPrompts.push('publiek_risico_profiel');
+        }
       } else {
-        // No prompts exist, create both
+        // No prompts exist, create all three
         await addDoc(promptsRef, {
           type: 'publiek_organisatie_profiel',
           promptTekst: branchePrompt,
@@ -1365,6 +1440,16 @@ Analyseer de organisatiecultuur en genereer een volledig CultuurProfiel met de v
           createdBy: userId
         });
         newPrompts.push('publiek_cultuur_profiel');
+        
+        await addDoc(promptsRef, {
+          type: 'publiek_risico_profiel',
+          promptTekst: risicoPrompt,
+          versie: 1,
+          isActief: true,
+          createdAt: now,
+          createdBy: userId
+        });
+        newPrompts.push('publiek_risico_profiel');
       }
       
       return { 
@@ -1452,3 +1537,9 @@ export interface RichtingLocatie {
   latitude?: number;
   longitude?: number;
 }
+
+// Re-export services for convenience
+export { processService } from './processService';
+export { functionService } from './functionService';
+export { substanceService } from './substanceService';
+export { addRiskAssessment, getRisksByCustomer, getRisksByProcess, getRisksByFunction, getRisksBySubstance, getHighImpactRisks, getRisksByFilter, getRisksByProcessAndSubstance, batchImportRiskAssessments } from './riskService';

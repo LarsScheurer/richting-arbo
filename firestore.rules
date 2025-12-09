@@ -127,6 +127,78 @@ service cloud.firestore {
       allow read, update: if isAdmin();
     }
     
+    // Processes collection (RI&E)
+    match /processes/{processId} {
+      // Authenticated users can read all processes
+      allow read: if isAuthenticated();
+      
+      // Editors and Admins can create/update
+      allow create, update: if isEditorOrAdmin();
+      
+      // Only Admins can delete
+      allow delete: if isAdmin();
+    }
+    
+    // Functions collection (RI&E)
+    match /functions/{functionId} {
+      // Authenticated users can read all functions
+      allow read: if isAuthenticated();
+      
+      // Editors and Admins can create/update
+      allow create, update: if isEditorOrAdmin();
+      
+      // Only Admins can delete
+      allow delete: if isAdmin();
+    }
+    
+    // Substances collection (RI&E)
+    match /substances/{substanceId} {
+      // Authenticated users can read all substances
+      allow read: if isAuthenticated();
+      
+      // Editors and Admins can create/update
+      allow create, update: if isEditorOrAdmin();
+      
+      // Only Admins can delete
+      allow delete: if isAdmin();
+    }
+    
+    // RiskAssessments collection (RI&E)
+    match /riskAssessments/{riskId} {
+      // Authenticated users can read all risk assessments
+      allow read: if isAuthenticated();
+      
+      // Editors and Admins can create/update
+      allow create, update: if isEditorOrAdmin();
+      
+      // Only Admins can delete
+      allow delete: if isAdmin();
+    }
+    
+    // Locations collection (Customer locations)
+    match /locations/{locationId} {
+      // Authenticated users can read all locations
+      allow read: if isAuthenticated();
+      
+      // Editors and Admins can create/update
+      allow create, update: if isEditorOrAdmin();
+      
+      // Only Admins can delete
+      allow delete: if isAdmin();
+    }
+    
+    // Contacts collection (Contact persons)
+    match /contacts/{contactId} {
+      // Authenticated users can read all contacts
+      allow read: if isAuthenticated();
+      
+      // Editors and Admins can create/update
+      allow create, update: if isEditorOrAdmin();
+      
+      // Only Admins can delete
+      allow delete: if isAdmin();
+    }
+    
     // Default: deny all other access
     match /{document=**} {
       allow read, write: if false;

@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { User, DocumentSource, KNOWLEDGE_STRUCTURE, DocType, GeminiAnalysisResult, ChatMessage, Customer, Location, UserRole, ContactPerson, OrganisatieProfiel, Risico, Proces, Functie } from './types';
-import { authService, dbService, customerService, promptService, richtingLocatiesService, Prompt, RichtingLocatie } from './services/firebase';
+import { authService, dbService, customerService, promptService, richtingLocatiesService, Prompt, RichtingLocatie, processService, functionService, substanceService } from './services/firebase';
+import { addRiskAssessment, getRisksByCustomer, getRisksByProcess, getRisksByFunction, getRisksBySubstance } from './services/riskService';
+import { Process, Function as FunctionType, Substance, RiskAssessment } from './types/firestore';
 import { doc, updateDoc } from 'firebase/firestore';
 import { db } from './services/firebase';
 import { Layout, RichtingLogo } from './components/Layout';
@@ -333,6 +335,16 @@ const CustomerDetailView = ({
   const [cultuurAnalyseStap, setCultuurAnalyseStap] = useState(0); // 0 = niet gestart, 1-12 = huidige stap
   const [analyseId, setAnalyseId] = useState<string | null>(null);
   const [hoofdstukkenResultaten, setHoofdstukkenResultaten] = useState<{[key: string]: string}>({});
+  
+  // Risico Profiel state
+  const [isAnalyzingRisico, setIsAnalyzingRisico] = useState(false);
+  const [risicoProfielData, setRisicoProfielData] = useState<{
+    processen: Process[];
+    functies: FunctionType[];
+    stoffen: Substance[];
+    risicos: RiskAssessment[];
+  } | null>(null);
+  const [activeRisicoTab, setActiveRisicoTab] = useState<'overview' | 'processen' | 'functies' | 'stoffen' | 'risicos'>('overview');
   
   // New Location Form
   const [locName, setLocName] = useState('');
@@ -1066,6 +1078,65 @@ const CustomerDetailView = ({
              >
                {isAnalyzingCultuur ? "⏳ Analyseren..." : "🎭 Cultuur Analyse"}
              </button>
+             <button
+               onClick={async () => {
+                 setIsAnalyzingRisico(true);
+                 setRisicoProfielData(null);
+                 
+                 try {
+                   const functionsUrl = 'https://europe-west4-richting-sales-d764a.cloudfunctions.net/analyseRisicoProfiel';
+                   const response = await fetch(functionsUrl, {
+                     method: 'POST',
+                     headers: {
+                       'Content-Type': 'application/json',
+                     },
+                     body: JSON.stringify({ 
+                       customerId: customer.id,
+                       organisatieNaam: customer.name,
+                       website: customer.website || '',
+                       userId: user.id
+                     })
+                   });
+
+                   if (!response.ok) {
+                     const errorData = await response.json().catch(() => ({ error: `HTTP error! status: ${response.status}` }));
+                     throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
+                   }
+
+                   const data = await response.json();
+                   
+                   if (data.success) {
+                     // Reload data from Firestore
+                     const [processen, functies, stoffen, risicos] = await Promise.all([
+                       processService.getProcessesByCustomer(customer.id),
+                       functionService.getFunctionsByCustomer(customer.id),
+                       substanceService.getSubstancesByCustomer(customer.id),
+                       getRisksByCustomer(customer.id)
+                     ]);
+                     
+                     setRisicoProfielData({
+                       processen,
+                       functies,
+                       stoffen,
+                       risicos
+                     });
+                     
+                     alert(`✅ Risico profiel analyse voltooid!\n\n${data.summary.processen} processen\n${data.summary.functies} functies\n${data.summary.stoffen} stoffen\n${data.summary.risicos} risico's`);
+                   } else {
+                     throw new Error(data.error || 'Onbekende fout');
+                   }
+                 } catch (error: any) {
+                   console.error("Risico analyse error:", error);
+                   alert(`❌ Fout bij risico analyse: ${error.message || 'Onbekende fout'}`);
+                 } finally {
+                   setIsAnalyzingRisico(false);
+                 }
+               }}
+               disabled={isAnalyzingRisico}
+               className="bg-red-600 text-white px-4 py-2 rounded-lg text-sm font-bold hover:bg-red-700 disabled:opacity-50 transition-colors flex items-center gap-2"
+             >
+               {isAnalyzingRisico ? "⏳ Analyseren..." : "⚠️ Risico Profiel"}
+             </button>
            </div>
          </div>
 
@@ -1268,6 +1339,130 @@ const CustomerDetailView = ({
            <div className="bg-slate-50 border border-slate-200 rounded-lg p-4 mb-4">
              <h4 className="font-bold text-slate-700 mb-2 flex items-center gap-2">🎭 Cultuur Analyse Resultaat</h4>
              <p className="text-sm text-gray-700 whitespace-pre-wrap">{cultuurAnalyseResultaat}</p>
+           </div>
+         )}
+
+         {/* Risico Profiel Data Display */}
+         {risicoProfielData && (
+           <div className="bg-white border border-red-200 rounded-lg p-6 mb-4">
+             <h4 className="font-bold text-red-700 mb-4 flex items-center gap-2">⚠️ Risico Profiel</h4>
+             
+             {/* Tabs */}
+             <div className="flex gap-2 mb-4 border-b border-gray-200">
+               {(['overview', 'processen', 'functies', 'stoffen', 'risicos'] as const).map(tab => (
+                 <button
+                   key={tab}
+                   onClick={() => setActiveRisicoTab(tab)}
+                   className={`px-4 py-2 text-sm font-medium rounded-t-lg transition-colors ${
+                     activeRisicoTab === tab
+                       ? 'bg-red-50 text-red-700 border-b-2 border-red-600'
+                       : 'text-gray-600 hover:text-red-600'
+                   }`}
+                 >
+                   {tab === 'overview' ? '📊 Overzicht' : 
+                    tab === 'processen' ? `⚙️ Processen (${risicoProfielData.processen.length})` :
+                    tab === 'functies' ? `👥 Functies (${risicoProfielData.functies.length})` :
+                    tab === 'stoffen' ? `🧪 Stoffen (${risicoProfielData.stoffen.length})` :
+                    `⚠️ Risico's (${risicoProfielData.risicos.length})`}
+                 </button>
+               ))}
+             </div>
+             
+             {/* Tab Content */}
+             <div className="mt-4">
+               {activeRisicoTab === 'overview' && (
+                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                   <div className="bg-blue-50 p-4 rounded-lg">
+                     <p className="text-sm text-gray-600">Processen</p>
+                     <p className="text-2xl font-bold text-blue-700">{risicoProfielData.processen.length}</p>
+                   </div>
+                   <div className="bg-green-50 p-4 rounded-lg">
+                     <p className="text-sm text-gray-600">Functies</p>
+                     <p className="text-2xl font-bold text-green-700">{risicoProfielData.functies.length}</p>
+                   </div>
+                   <div className="bg-yellow-50 p-4 rounded-lg">
+                     <p className="text-sm text-gray-600">Stoffen</p>
+                     <p className="text-2xl font-bold text-yellow-700">{risicoProfielData.stoffen.length}</p>
+                   </div>
+                   <div className="bg-red-50 p-4 rounded-lg">
+                     <p className="text-sm text-gray-600">Risico's</p>
+                     <p className="text-2xl font-bold text-red-700">{risicoProfielData.risicos.length}</p>
+                   </div>
+                 </div>
+               )}
+               
+               {activeRisicoTab === 'processen' && (
+                 <div className="space-y-3">
+                   {risicoProfielData.processen.map(proc => (
+                     <div key={proc.id} className="border border-gray-200 rounded-lg p-4">
+                       <h5 className="font-bold text-gray-800">{proc.name}</h5>
+                       {proc.description && <p className="text-sm text-gray-600 mt-1">{proc.description}</p>}
+                     </div>
+                   ))}
+                 </div>
+               )}
+               
+               {activeRisicoTab === 'functies' && (
+                 <div className="space-y-3">
+                   {risicoProfielData.functies.map(func => (
+                     <div key={func.id} className="border border-gray-200 rounded-lg p-4">
+                       <h5 className="font-bold text-gray-800">{func.name}</h5>
+                       {func.department && <p className="text-xs text-gray-500">{func.department}</p>}
+                       {func.description && <p className="text-sm text-gray-600 mt-1">{func.description}</p>}
+                     </div>
+                   ))}
+                 </div>
+               )}
+               
+               {activeRisicoTab === 'stoffen' && (
+                 <div className="space-y-3">
+                   {risicoProfielData.stoffen.map(stof => (
+                     <div key={stof.id} className="border border-gray-200 rounded-lg p-4">
+                       <h5 className="font-bold text-gray-800">{stof.name}</h5>
+                       {stof.casNumber && <p className="text-xs text-gray-500">CAS: {stof.casNumber}</p>}
+                       {stof.hazardPhrases && stof.hazardPhrases.length > 0 && (
+                         <p className="text-xs text-red-600 mt-1">H-zinnen: {stof.hazardPhrases.join(', ')}</p>
+                       )}
+                       {stof.description && <p className="text-sm text-gray-600 mt-1">{stof.description}</p>}
+                     </div>
+                   ))}
+                 </div>
+               )}
+               
+               {activeRisicoTab === 'risicos' && (
+                 <div className="space-y-3">
+                   {risicoProfielData.risicos.map(risico => (
+                     <div key={risico.id} className={`border rounded-lg p-4 ${
+                       risico.calculatedScore >= 400 ? 'border-red-500 bg-red-50' :
+                       risico.calculatedScore >= 200 ? 'border-orange-500 bg-orange-50' :
+                       risico.calculatedScore >= 100 ? 'border-yellow-500 bg-yellow-50' :
+                       'border-gray-200 bg-gray-50'
+                     }`}>
+                       <div className="flex items-start justify-between">
+                         <div>
+                           <h5 className="font-bold text-gray-800">{risico.riskName}</h5>
+                           <p className="text-xs text-gray-500 mt-1">
+                             Score: {risico.calculatedScore} | 
+                             Prioriteit: {risico.prioriteit} | 
+                             Kans: {risico.probability} | 
+                             Effect: {risico.effect} | 
+                             Blootstelling: {risico.exposure}
+                           </p>
+                         </div>
+                         <span className={`px-2 py-1 rounded text-xs font-bold ${
+                           risico.prioriteit === 'Zeer hoog' ? 'bg-red-600 text-white' :
+                           risico.prioriteit === 'Hoog' ? 'bg-orange-500 text-white' :
+                           risico.prioriteit === 'Middel' ? 'bg-yellow-500 text-white' :
+                           'bg-gray-400 text-white'
+                         }`}>
+                           {risico.prioriteit}
+                         </span>
+                       </div>
+                     </div>
+                   ))}
+                 </div>
+               )}
+             </div>
            </div>
          )}
 

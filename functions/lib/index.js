@@ -2755,4 +2755,281 @@ exports.getAnalyseProgress = (0, https_1.onRequest)({
         res.status(500).json({ error: error.message });
     }
 });
+// Helper function to repair JSON string
+function repairJsonString(jsonStr) {
+    // Remove markdown code blocks
+    jsonStr = jsonStr.replace(/```json/g, '').replace(/```/g, '').trim();
+    // Try to extract JSON if wrapped in text
+    const jsonMatch = jsonStr.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+        jsonStr = jsonMatch[0];
+    }
+    // Escape control characters
+    jsonStr = jsonStr.replace(/[\x00-\x1F\x7F]/g, '');
+    // Fix common JSON issues
+    jsonStr = jsonStr.replace(/,\s*}/g, '}').replace(/,\s*]/g, ']');
+    return jsonStr;
+}
+// Analyse Risico Profiel Function
+exports.analyseRisicoProfiel = (0, https_1.onRequest)({
+    cors: true,
+    timeoutSeconds: 540,
+    memory: "512MiB"
+}, async (req, res) => {
+    res.set('Access-Control-Allow-Origin', '*');
+    res.set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.set('Access-Control-Allow-Headers', 'Content-Type');
+    if (req.method === 'OPTIONS') {
+        res.status(204).send('');
+        return;
+    }
+    if (!genAI) {
+        res.status(500).json({ error: "Server misconfiguration: API Key missing." });
+        return;
+    }
+    const { customerId, organisatieNaam, website, userId } = req.body;
+    if (!customerId || !organisatieNaam || !website) {
+        res.status(400).json({ error: "customerId, organisatieNaam en website zijn verplicht" });
+        return;
+    }
+    try {
+        const db = getFirestoreDb();
+        const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+        // Get active prompt from Firestore
+        let promptTekst = '';
+        try {
+            const promptsRef = db.collection('prompts');
+            let activePromptQuery = await promptsRef
+                .where('type', '==', 'publiek_risico_profiel')
+                .where('isActief', '==', true)
+                .orderBy('versie', 'desc')
+                .limit(1)
+                .get();
+            if (!activePromptQuery.empty) {
+                const activeDoc = activePromptQuery.docs[0];
+                promptTekst = activeDoc.data().promptTekst;
+                console.log(`Using active risico profiel prompt version ${activeDoc.data().versie}`);
+            }
+            else {
+                console.log('No active risico profiel prompt found, using default');
+                // Fallback default prompt
+                promptTekst = `Je bent Gemini, geconfigureerd als een deskundige RI&E (Risico Inventarisatie & Evaluatie) specialist voor Richting.
+
+Analyseer de organisatie [organisatieNaam] (website: [website]) en identificeer alle processen, functies, gevaarlijke stoffen en risico's.
+
+Gebruik de Fine & Kinney methode voor risicoberekening:
+- Probability (Kans/W): 0.5, 1, 3, 6, of 10
+- Effect (E): 1, 3, 7, 15, of 40
+- Exposure (Blootstelling/B): 1-10 (aantal personen)
+
+Geef het antwoord in puur JSON formaat.`;
+            }
+        }
+        catch (promptError) {
+            console.error("Error fetching prompt from Firestore:", promptError);
+        }
+        // Build prompt with context
+        const fullPrompt = `${promptTekst}
+
+ORGANISATIE NAAM: ${organisatieNaam}
+WEBSITE: ${website}
+
+Voer nu de risico analyse uit en geef het resultaat in het gevraagde JSON formaat.`;
+        console.log('Calling Gemini for risico profiel analysis...');
+        const result = await model.generateContent(fullPrompt);
+        const response = await result.response;
+        let jsonStr = response.text();
+        // Repair JSON
+        jsonStr = repairJsonString(jsonStr);
+        let analysisData;
+        try {
+            analysisData = JSON.parse(jsonStr);
+        }
+        catch (parseError) {
+            console.error('JSON parse error:', parseError);
+            console.error('JSON string:', jsonStr.substring(0, 500));
+            res.status(500).json({ error: "Failed to parse Gemini response as JSON", details: parseError.message });
+            return;
+        }
+        // Validate and save data to Firestore
+        const processes = analysisData.processen || [];
+        const functies = analysisData.functies || [];
+        const stoffen = analysisData.stoffen || [];
+        const risicos = analysisData.risicos || [];
+        // Save processes
+        const processIds = {};
+        for (const proc of processes) {
+            try {
+                const processData = {
+                    customerId: customerId,
+                    name: proc.name || proc.naam,
+                    description: proc.description || proc.beschrijving || '',
+                    relatedFunctionIds: proc.relatedFunctionIds || [],
+                    relatedSubstanceIds: proc.relatedSubstanceIds || [],
+                    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+                    updatedAt: admin.firestore.FieldValue.serverTimestamp()
+                };
+                const processRef = await db.collection('processes').add(processData);
+                processIds[proc.name || proc.naam] = processRef.id;
+                console.log(`✅ Saved process: ${processData.name}`);
+            }
+            catch (error) {
+                console.error(`Error saving process ${proc.name}:`, error);
+            }
+        }
+        // Save functions
+        const functionIds = {};
+        for (const func of functies) {
+            try {
+                const functionData = {
+                    customerId: customerId,
+                    name: func.name || func.naam,
+                    description: func.description || func.beschrijving || '',
+                    department: func.department || func.afdeling || '',
+                    fysiek: func.fysiek || undefined,
+                    psychisch: func.psychisch || undefined,
+                    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+                    updatedAt: admin.firestore.FieldValue.serverTimestamp()
+                };
+                const functionRef = await db.collection('functions').add(functionData);
+                functionIds[func.name || func.naam] = functionRef.id;
+                console.log(`✅ Saved function: ${functionData.name}`);
+            }
+            catch (error) {
+                console.error(`Error saving function ${func.name}:`, error);
+            }
+        }
+        // Save substances
+        const substanceIds = {};
+        for (const stof of stoffen) {
+            try {
+                const substanceData = {
+                    customerId: customerId,
+                    name: stof.name || stof.naam,
+                    casNumber: stof.casNumber || stof.casNummer || '',
+                    hazardPhrases: stof.hazardPhrases || stof.hazardPhrases || [],
+                    description: stof.description || stof.beschrijving || '',
+                    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+                    updatedAt: admin.firestore.FieldValue.serverTimestamp()
+                };
+                const substanceRef = await db.collection('substances').add(substanceData);
+                substanceIds[stof.name || stof.naam] = substanceRef.id;
+                console.log(`✅ Saved substance: ${substanceData.name}`);
+            }
+            catch (error) {
+                console.error(`Error saving substance ${stof.name}:`, error);
+            }
+        }
+        // Save risk assessments (with calculated scores)
+        const riskIds = {};
+        for (const risico of risicos) {
+            try {
+                // Convert Fine & Kinney values if needed
+                let probability = risico.probability || risico.kans;
+                let effect = risico.effect;
+                let exposure = risico.exposure || risico.blootstelling || 3;
+                // Map old kans values (1-5) to Fine & Kinney (0.5, 1, 3, 6, 10)
+                if (probability >= 1 && probability <= 5) {
+                    const mapping = { 1: 0.5, 2: 1, 3: 3, 4: 6, 5: 10 };
+                    probability = mapping[probability] || 3;
+                }
+                // Map old effect values (1-5) to Fine & Kinney (1, 3, 7, 15, 40)
+                if (effect >= 1 && effect <= 5) {
+                    const mapping = { 1: 1, 2: 3, 3: 7, 4: 15, 5: 40 };
+                    effect = mapping[effect] || 7;
+                }
+                // Calculate score
+                const calculatedScore = probability * effect * exposure;
+                // Calculate priority
+                let priority = 5;
+                if (calculatedScore >= 400)
+                    priority = 1;
+                else if (calculatedScore >= 200)
+                    priority = 2;
+                else if (calculatedScore >= 100)
+                    priority = 3;
+                else if (calculatedScore >= 50)
+                    priority = 4;
+                // Resolve IDs from names
+                let processId = risico.processId;
+                let functionId = risico.functionId;
+                let substanceId = risico.substanceId;
+                // If IDs are names, resolve them
+                if (processId && !processId.startsWith('process_') && processIds[processId]) {
+                    processId = processIds[processId];
+                }
+                if (functionId && !functionId.startsWith('function_') && functionIds[functionId]) {
+                    functionId = functionIds[functionId];
+                }
+                if (substanceId && !substanceId.startsWith('substance_') && substanceIds[substanceId]) {
+                    substanceId = substanceIds[substanceId];
+                }
+                const riskData = {
+                    customerId: customerId,
+                    riskName: risico.riskName || risico.naam,
+                    description: risico.description || risico.beschrijving || '',
+                    category: risico.category || risico.categorie || 'overige',
+                    probability: probability,
+                    effect: effect,
+                    exposure: exposure,
+                    calculatedScore: calculatedScore,
+                    priority: priority,
+                    processId: processId || null,
+                    functionId: functionId || null,
+                    substanceId: substanceId || null,
+                    createdBy: userId || 'system',
+                    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+                    updatedAt: admin.firestore.FieldValue.serverTimestamp()
+                };
+                // Remove null values
+                if (!riskData.processId)
+                    delete riskData.processId;
+                if (!riskData.functionId)
+                    delete riskData.functionId;
+                if (!riskData.substanceId)
+                    delete riskData.substanceId;
+                const riskRef = await db.collection('riskAssessments').add(riskData);
+                riskIds[risico.riskName || risico.naam] = riskRef.id;
+                console.log(`✅ Saved risk: ${riskData.riskName} (score: ${calculatedScore}, priority: ${priority})`);
+            }
+            catch (error) {
+                console.error(`Error saving risk ${risico.riskName || risico.naam}:`, error);
+            }
+        }
+        // Update process relations with actual function/substance IDs
+        for (const proc of processes) {
+            const processName = proc.name || proc.naam;
+            const processId = processIds[processName];
+            if (processId && proc.relatedFunctionIds) {
+                const resolvedFunctionIds = proc.relatedFunctionIds
+                    .map((name) => functionIds[name] || name)
+                    .filter(Boolean);
+                const resolvedSubstanceIds = (proc.relatedSubstanceIds || [])
+                    .map((name) => substanceIds[name] || name)
+                    .filter(Boolean);
+                if (resolvedFunctionIds.length > 0 || resolvedSubstanceIds.length > 0) {
+                    await db.collection('processes').doc(processId).update({
+                        relatedFunctionIds: resolvedFunctionIds,
+                        relatedSubstanceIds: resolvedSubstanceIds,
+                        updatedAt: admin.firestore.FieldValue.serverTimestamp()
+                    });
+                }
+            }
+        }
+        res.json({
+            success: true,
+            message: 'Risico profiel analyse voltooid',
+            summary: {
+                processen: processes.length,
+                functies: functies.length,
+                stoffen: stoffen.length,
+                risicos: risicos.length
+            }
+        });
+    }
+    catch (error) {
+        console.error('Error in analyseRisicoProfiel:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
 //# sourceMappingURL=index.js.map
