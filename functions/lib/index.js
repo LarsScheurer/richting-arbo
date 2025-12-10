@@ -305,146 +305,35 @@ exports.askQuestion = (0, https_1.onRequest)({ cors: true }, async (req, res) =>
         res.status(500).json({ error: error.message });
     }
 });
-// Default Branche Analyse Prompt (fallback als Firestore geen prompt heeft)
+// Default Branche Analyse Prompt (VEREENVOUDIGD - Focus op locaties en medewerkers)
+// Laatste update: ${new Date().toISOString()}
 const DEFAULT_BRANCHE_ANALYSE_PROMPT = `
-Je bent Gemini, geconfigureerd als een deskundige adviseur en brancheanalist voor Richting, een toonaangevende, gecertificeerde arbodienst in Nederland. Je primaire taak is het uitvoeren van een diepgaande organisatie- en brancheanalyse op basis van een door de gebruiker opgegeven organisatienaam en website.
+Je bent Gemini, geconfigureerd als een deskundige adviseur voor Richting, een toonaangevende, gecertificeerde arbodienst in Nederland.
 
-Je schrijft altijd vanuit de identiteit en expertise van Richting. De toon is persoonlijk, professioneel, proactief en adviserend, gericht aan de directie van de te analyseren organisatie. Het doel is niet alleen te informeren, maar vooral om concrete, op maat gemaakte adviezen en een stappenplan voor samenwerking aan te bieden.
+PRIMAIRE DOELSTELLING:
+Identificeer alle vestigingslocaties van de organisatie, het aantal medewerkers per locatie, en de dichtstbijzijnde Richting vestiging voor elke locatie.
 
 OPDRACHT:
 
-Zodra je de organisatienaam en website hebt, voer je een "deep search" uit en genereer je een volledig analyserapport.
+Gebruik de organisatienaam en website om de volgende informatie te verzamelen:
 
-Dit rapport moet strikt de structuur en kwaliteitsnormen volgen zoals vastgelegd in het "Handboek: Kwaliteitsstandaard voor Diepgaande Brancheanalyse". Werk alle onderstaande hoofdstukken volledig en gedetailleerd uit.
+Hoofdstuk 1: Locaties en Medewerkers
+- Zoek alle vestigingslocaties van de organisatie in Nederland
+- Voor elke locatie verzamel:
+  * Naam van de locatie (bijv. "Hoofdkantoor", "Vestiging Amsterdam", "Productielocatie Rotterdam")
+  * Volledig adres (straat, huisnummer, postcode, stad)
+  * Stad
+  * Aantal medewerkers op die locatie (verplicht - gebruik 0 als onbekend)
+  * Dichtstbijzijnde Richting vestiging (bijv. "Richting Amsterdam", "Richting Rotterdam", "Richting Utrecht")
 
-DE GOUDEN STANDAARD: RAPPORTSTRUCTUUR
+BELANGRIJK: 
+- Geef het antwoord ALLEEN in puur, geldig JSON formaat. Geen markdown, geen code blocks, geen extra tekst.
+- Zorg dat alle string waarden correct ge-escaped zijn (newlines als \\n, quotes als \\").
+- De JSON moet direct parseerbaar zijn zonder enige bewerking.
 
-Aanhef: "Geachte directie van [Naam Organisatie],"
-
-Inleiding: Een korte, persoonlijke introductie vanuit Richting, waarin je het doel van dit rapport uitlegt: het bieden van inzicht in de branche-specifieke risico's en het voorstellen van een proactieve aanpak voor een gezonde en veilige werkomgeving. Vermeld bovenaan het rapport de berekende totaalscore en gemiddelde risicoscore van de branche.
-
-Hoofdstuk 1: Introductie en Branche-identificatie
-- Geef een algemene beschrijving van de sector en de belangrijkste activiteiten.
-- Analyseer de actualiteiten in de branche op het gebied van mens en werk (arbeidsmarkt, trends, vacatures).
-- Identificeer de belangrijkste CAO-thema's die relevant zijn voor verzuim en arbeidsomstandigheden. Benoem de betrokken werkgevers- en werknemersorganisaties.
-
-Hoofdstuk 2: SBI-codes en Bedrijfsinformatie
-- Toon in een tabel de relevante SBI-codes met omschrijving.
-- Analyseer de personele omvang en vestigingslocaties van de organisatie in Nederland.
-- Identificeer alle vestigingslocaties met volledige adresgegevens (straat, huisnummer, postcode, stad).
-- Voor elke locatie: geef de naam (bijv. "Hoofdkantoor", "Vestiging Amsterdam"), volledig adres, stad, en indien beschikbaar het aantal medewerkers op die locatie.
-- Presenteer in een tabel de personele aantallen per regio (Noord, Midden Oost, Midden Zuid, Zuid Nederland). Geef aan als data onbekend is.
-- Vermeld in de tabel de dichtstbijzijnde Richting-locatie.
-
-Hoofdstuk 3: Arbocatalogus en Branche-RI&E
-- Geef een overzicht van de door de branche erkende arbo-instrumenten (Arbocatalogus, Branche-RI&E), inclusief hun status en directe hyperlinks.
-
-Hoofdstuk 4: Risicocategorieën en Kwantificering
-- Presenteer een tabel met de belangrijkste risico's, onderverdeeld in 'Psychische risico's', 'Fysieke risico's', en 'Overige'.
-- Kwantificeer elk risico met een score voor Kans (1-5) en Effect (1-5) en bereken de totaalscore (Kans * Effect).
-- Toon onderaan de tabel de totaaltelling van alle risicoscores.
-- Licht in een korte alinea de berekende totaalscore en gemiddelde score toe, zoals vermeld in de inleiding.
-
-Hoofdstuk 5: Primaire Processen in de Branche
-- Beschrijf stapsgewijs de kernprocessen op de werkvloer die typerend zijn voor deze branche.
-
-Hoofdstuk 6: Werkzaamheden en Functies
-- Geef een overzicht van de meest voorkomende functies, inclusief een omschrijving en voorbeelden van taken.
-
-Hoofdstuk 7: Verzuim in de Branche
-- Analyseer het verzuim in de branche, benoem de belangrijkste oorzaken en vergelijk dit met het landelijk gemiddelde.
-- Presenteer een matrix van verzuimrisico's per functie. Gebruik de functies in de rijen en de risico's in de kolommen.
-
-Hoofdstuk 8: Beroepsziekten in de Branche
-- Analyseer de meest voorkomende beroepsziekten en koppel deze direct aan de geïdentificeerde risico's uit hoofdstuk 4.
-
-Hoofdstuk 9: Gevaarlijke Stoffen en Risico's
-- Indien van toepassing, beschrijf de gevaarlijke stoffen die in de sector worden gebruikt.
-- Presenteer een matrix die de risico's bij de hantering van deze stoffen weergeeft.
-
-Hoofdstuk 10: Risicomatrices
-- Matrix 1: Risico's per Primair Proces.
-- Matrix 2: Risico's per Functie.
-
-Hoofdstuk 11: Vooruitblik en Speerpunten
-- Analyseer het verwachte effect van CAO-thema's op o.a. verzuim, verloop en aantrekkingskracht op de arbeidsmarkt.
-- Formuleer concrete speerpunten voor de ondernemer om verzuim positief te beïnvloeden en te prioriteren.
-- Benoem de gezamenlijke thema's die de ondernemer samen met Richting kan oppakken. Koppel elk speerpunt direct aan een specifieke dienst van Richting met een hyperlink.
-
-Hoofdstuk 12: Stappenplan voor een Preventieve Samenwerking
-- Integreer de visuele weergave van het "Stappenplan Samenwerken aan preventie".
-- Presenteer een concreet en op maat gemaakt stappenplan voor de organisatie, gebaseerd op de analyse. Begin altijd met Implementatie en Verzuimbegeleiding.
-- Doe voorstellen voor specifieke diensten van Richting (RI&E, PMO, Werkplekonderzoek, Het Richtinggevende Gesprek, etc.) met directe hyperlinks naar de relevante webpagina's.
-- Indien er thema's zijn waarvoor geen standaarddienst bestaat, stel maatwerk voor en benadruk dat Richting alle expertise in huis heeft.
-
-Hoofdstuk 13: Bronvermeldingen
-- Geef een volledige lijst van geraadpleegde bronnen, opgemaakt in APA-stijl, met directe en werkende hyperlinks.
-
-CRUCIALE KWALITEITS- EN FORMATVEREISTEN:
-- Visuele Symbolen: Gebruik in alle matrices visuele symbolen (bijv. ● voor 'hoog', ◐ voor 'gemiddeld', ○ voor 'laag') in plaats van tekst om de data visueel en direct interpreteerbaar te maken.
-- Geen Google Links: Verifieer dat absoluut geen enkele hyperlink in het rapport begint met https://www.google.com/search?q=. Alle links moeten directe URL's zijn.
-- Stijl: Het gehele rapport is geschreven in de 'u'-vorm, persoonlijk gericht aan de directie. De stijl is die van een deskundige partner die meedenkt en concrete oplossingen biedt.
-- Afsluiting: Sluit elk rapport af met de datum van generatie en een copyright-vermelding: © [Jaar] Richting. Alle rechten voorbehouden.
-
-BELANGRIJK: Geef het antwoord ALLEEN in puur, geldig JSON formaat. Geen markdown, geen code blocks, geen extra tekst. Alleen de JSON object. Zorg dat alle string waarden correct ge-escaped zijn (newlines als \\n, quotes als \\"). De JSON moet direct parseerbaar zijn zonder enige bewerking. Structuur:
+JSON STRUCTUUR:
 {
-  "volledigRapport": "Het volledige markdown rapport zoals hierboven beschreven",
-  "totaalScore": 0,
-  "gemiddeldeRisicoScore": 0,
-  "risicos": [
-    {
-      "id": "risico_1",
-      "naam": "...",
-      "categorie": "psychisch|fysiek|overige",
-      "kans": 1-5,
-      "effect": 1-5,
-      "totaalScore": kans * effect
-    }
-  ],
-  "processen": [
-    {
-      "id": "proces_1",
-      "naam": "...",
-      "beschrijving": "..."
-    }
-  ],
-  "functies": [
-    {
-      "id": "functie_1",
-      "naam": "...",
-      "beschrijving": "...",
-      "taken": ["...", "..."]
-    }
-  ],
-  "gevaarlijkeStoffen": [
-    {
-      "id": "stof_1",
-      "naam": "...",
-      "categorie": "...",
-      "risicoNiveau": "..."
-    }
-  ],
-  "beroepsziekten": [
-    {
-      "id": "ziekte_1",
-      "naam": "...",
-      "beschrijving": "...",
-      "gekoppeldeRisicos": ["risico_id"]
-    }
-  ],
-  "sbiCodes": [
-    {
-      "code": "...",
-      "omschrijving": "..."
-    }
-  ],
-  "personeleOmvang": [
-    {
-      "regio": "noord|midden_oost|midden_zuid|zuid",
-      "aantal": 0,
-      "richtingLocatie": "..."
-    }
-  ],
+  "volledigRapport": "Kort markdown rapport met bevindingen over locaties en medewerkers",
   "locaties": [
     {
       "naam": "Naam van de locatie (bijv. Hoofdkantoor, Vestiging Amsterdam)",
@@ -453,49 +342,7 @@ BELANGRIJK: Geef het antwoord ALLEEN in puur, geldig JSON formaat. Geen markdown
       "aantalMedewerkers": 0,
       "richtingLocatie": "Naam van de dichtstbijzijnde Richting vestiging (bijv. Richting Amsterdam, Richting Rotterdam)"
     }
-  ],
-  "verzuimRisicoMatrix": [
-    {
-      "functieId": "functie_id",
-      "risicoId": "risico_id",
-      "niveau": "hoog|gemiddeld|laag"
-    }
-  ],
-  "procesRisicoMatrix": [
-    {
-      "procesId": "proces_id",
-      "risicoId": "risico_id",
-      "niveau": "hoog|gemiddeld|laag"
-    }
-  ],
-  "functieRisicoMatrix": [
-    {
-      "functieId": "functie_id",
-      "risicoId": "risico_id",
-      "niveau": "hoog|gemiddeld|laag"
-    }
-  ],
-  "functieBelasting": [
-    {
-      "functieId": "functie_id",
-      "fysiek": 1-5,
-      "psychisch": 1-5
-    }
-  ],
-  "actiePlan": [
-    {
-      "id": "actie_1",
-      "titel": "Korte titel van de actie",
-      "beschrijving": "Uitgebreide beschrijving van wat er moet gebeuren",
-      "prioriteit": "laag|gemiddeld|hoog|urgent",
-      "richtingDienst": "Naam van de Richting dienst (bijv. RI&E, PMO, Werkplekonderzoek)",
-      "dienstUrl": "URL naar de dienst pagina (als beschikbaar)"
-    }
-  ],
-  "rating": {
-    "werkEnGezondheid": "laag|gemiddeld|hoog|zeer_hoog",
-    "risicoCategorie": ["categorie1", "categorie2"]
-  }
+  ]
 }
 `;
 // Default prompt voor Publiek Cultuur Profiel (fallback als geen actieve prompt gevonden wordt)
@@ -815,7 +662,7 @@ exports.analyseBranche = (0, https_1.onRequest)({
         res.status(500).json({ error: "Server misconfiguration: API Key missing." });
         return;
     }
-    const { organisatieNaam, website } = req.body;
+    const { organisatieNaam, website, customerId } = req.body;
     if (!organisatieNaam || !website) {
         res.status(400).json({ error: "organisatieNaam en website zijn verplicht" });
         return;
@@ -1057,6 +904,32 @@ Voer nu de analyse uit en geef het resultaat in het gevraagde JSON formaat.`;
                 }
                 return locatie;
             });
+
+            // Persist locaties to Firestore (richting01) if customerId is provided
+            if (customerId) {
+                try {
+                    const db = getFirestoreDb();
+                    const batch = db.batch();
+                    json.locaties.forEach((locatie, idx) => {
+                        const locRef = db.collection('locations').doc();
+                        batch.set(locRef, {
+                            customerId: customerId,
+                            name: locatie.naam || locatie.name || `Locatie ${idx + 1}`,
+                            address: locatie.adres || locatie.address || '',
+                            city: locatie.stad || locatie.city || '',
+                            employeeCount: locatie.aantalMedewerkers ?? locatie.aantal ?? null,
+                            richtingLocatieNaam: locatie.richtingLocatie || null,
+                            createdAt: admin.firestore.FieldValue.serverTimestamp(),
+                            updatedAt: admin.firestore.FieldValue.serverTimestamp()
+                        });
+                    });
+                    await batch.commit();
+                    console.log(`💾 Saved ${json.locaties.length} locaties to Firestore for customer ${customerId}`);
+                }
+                catch (saveError) {
+                    console.error('❌ Error saving locaties to Firestore:', saveError);
+                }
+            }
         }
         // Add richtingLocatie to each regio in personeleOmvang
         if (json.personeleOmvang && Array.isArray(json.personeleOmvang)) {
@@ -2142,61 +2015,129 @@ function extractKeyDataFromHoofdstuk(hoofdstukNummer, content, jsonData) {
     if (hoofdstukNummer === '6' && jsonData && jsonData.functies) {
         keyData.functies = jsonData.functies;
     }
-    if (hoofdstukNummer === '2' && jsonData) {
+    // Locaties kunnen in hoofdstuk 1 of 2 zitten (afhankelijk van prompt)
+    if ((hoofdstukNummer === '1' || hoofdstukNummer === '2') && jsonData) {
         if (jsonData.sbiCodes) keyData.sbiCodes = jsonData.sbiCodes;
         if (jsonData.locaties) keyData.locaties = jsonData.locaties;
         if (jsonData.personeleOmvang) keyData.personeleOmvang = jsonData.personeleOmvang;
     }
     return keyData;
 }
-// Helper function to create context summary for prompts
-function createContextSummary(context) {
-    let summary = `ORGANISATIE: ${context.organisatieNaam}\nWEBSITE: ${context.website}\n\n`;
+// Helper function to create context summary for prompts (OPTIMIZED: shorter, more focused)
+function createContextSummary(context, currentHoofdstukNummer) {
+    let summary = `ORGANISATIE: ${context.organisatieNaam}\nWEBSITE: ${context.website}\n`;
     if (context.metadata.branche) {
         summary += `BRANCHE: ${context.metadata.branche}\n`;
     }
-    summary += '\nCONTEXT VAN VOORGAANDE HOOFDSTUKKEN:\n';
-    Object.keys(context.hoofdstukken).sort().forEach((key) => {
+    
+    const hoofdstukKeys = Object.keys(context.hoofdstukken).sort();
+    if (hoofdstukKeys.length === 0) {
+        return summary; // No previous hoofdstukken yet
+    }
+    
+    summary += '\nVOORGAANDE HOOFDSTUKKEN (samenvatting):\n';
+    
+    // Only include relevant context - limit to last 3 hoofdstukken for efficiency
+    const relevantKeys = hoofdstukKeys.slice(-3);
+    
+    relevantKeys.forEach((key) => {
         const h = context.hoofdstukken[key];
-        summary += `\n## Hoofdstuk ${key}: ${h.titel}\n`;
-        summary += `${h.samenvatting}\n`;
-        // Add key data for important hoofdstukken
+        // Truncate samenvatting to max 50 words for efficiency
+        const shortSummary = h.samenvatting ? h.samenvatting.split(' ').slice(0, 50).join(' ') + '...' : '';
+        summary += `\nHoofdstuk ${key}: ${h.titel} - ${shortSummary}`;
+        
+        // Only add key data for critical hoofdstukken (risicos, processen, functies)
         if (h.keyData) {
             if (h.keyData.risicos && h.keyData.risicos.length > 0) {
-                summary += `\nGeïdentificeerde risico's:\n`;
-                h.keyData.risicos.forEach((r, idx) => {
-                    summary += `${idx + 1}. ${r.naam} (${r.categorie})\n`;
-                });
+                const risicoNames = h.keyData.risicos.slice(0, 10).map(r => r.naam).join(', ');
+                summary += `\n  Risico's: ${risicoNames}${h.keyData.risicos.length > 10 ? '...' : ''}`;
             }
             if (h.keyData.processen && h.keyData.processen.length > 0) {
-                summary += `\nGeïdentificeerde processen:\n`;
-                h.keyData.processen.forEach((p, idx) => {
-                    summary += `${idx + 1}. ${p.naam}\n`;
-                });
+                const procesNames = h.keyData.processen.slice(0, 5).map(p => p.naam).join(', ');
+                summary += `\n  Processen: ${procesNames}${h.keyData.processen.length > 5 ? '...' : ''}`;
             }
             if (h.keyData.functies && h.keyData.functies.length > 0) {
-                summary += `\nGeïdentificeerde functies:\n`;
-                h.keyData.functies.forEach((f, idx) => {
-                    summary += `${idx + 1}. ${f.naam}\n`;
-                });
+                const functieNames = h.keyData.functies.slice(0, 5).map(f => f.naam).join(', ');
+                summary += `\n  Functies: ${functieNames}${h.keyData.functies.length > 5 ? '...' : ''}`;
             }
         }
     });
+    
     return summary;
 }
-// Helper function to generate hoofdstuk prompt
+// Helper function to parse hoofdstukken from prompt text
+function parseHoofdstukkenFromPrompt(promptText) {
+    const hoofdstukken = [];
+    // Pattern to match: "Hoofdstuk X: Titel" or "Hoofdstuk X: Titel" followed by description
+    // Also handle variations like "Hoofdstuk X - Titel" or "Hoofdstuk X Titel"
+    const hoofdstukPattern = /Hoofdstuk\s+(\d+)[:\-\s]+([^\n]+)/gi;
+    const lines = promptText.split('\n');
+    let currentHoofdstuk = null;
+    let currentBeschrijving = [];
+    
+    for (let i = 0; i < lines.length; i++) {
+        const line = lines[i].trim();
+        const match = line.match(/Hoofdstuk\s+(\d+)[:\-\s]+(.+)/i);
+        
+        if (match) {
+            // Save previous hoofdstuk if exists
+            if (currentHoofdstuk) {
+                hoofdstukken.push({
+                    nummer: currentHoofdstuk.nummer,
+                    titel: currentHoofdstuk.titel,
+                    beschrijving: currentBeschrijving.join('\n').trim() || currentHoofdstuk.titel
+                });
+            }
+            // Start new hoofdstuk
+            currentHoofdstuk = {
+                nummer: match[1],
+                titel: match[2].trim()
+            };
+            currentBeschrijving = [];
+        } else if (currentHoofdstuk && line) {
+            // Check if line starts with bullet or dash (description item)
+            if (line.match(/^[-*]\s/) || line.match(/^\d+\.\s/)) {
+                currentBeschrijving.push(line);
+            } else if (line.length > 0 && !line.match(/^(DE GOUDEN|OPDRACHT|BELANGRIJK|CRUCIALE|Aanhef|Inleiding)/i)) {
+                // Add to description if it's not a section header
+                currentBeschrijving.push(line);
+            }
+        }
+    }
+    
+    // Add last hoofdstuk
+    if (currentHoofdstuk) {
+        hoofdstukken.push({
+            nummer: currentHoofdstuk.nummer,
+            titel: currentHoofdstuk.titel,
+            beschrijving: currentBeschrijving.join('\n').trim() || currentHoofdstuk.titel
+        });
+    }
+    
+    // Sort by hoofdstuk number
+    hoofdstukken.sort((a, b) => parseInt(a.nummer) - parseInt(b.nummer));
+    
+    console.log(`✅ Parsed ${hoofdstukken.length} hoofdstukken from prompt`);
+    return hoofdstukken;
+}
+// Helper function to generate hoofdstuk prompt (OPTIMIZED: shorter base prompt)
 function generateHoofdstukPrompt(hoofdstukNummer, titel, beschrijving, context) {
-    const contextSummary = createContextSummary(context);
-    // Use base prompt from Firestore if available, otherwise use default
+    const contextSummary = createContextSummary(context, hoofdstukNummer);
+    
+    // OPTIMIZATION: Instead of sending the full base prompt every time, send only essential instructions
+    // Extract only the core instructions from base prompt (first 500 chars should contain the key instructions)
     const basePromptText = context.basePrompt || DEFAULT_BRANCHE_ANALYSE_PROMPT;
-    // Extract relevant section from base prompt for this hoofdstuk
-    // For now, we'll use the base prompt as context and add hoofdstuk-specific instructions
+    const coreInstructions = basePromptText.substring(0, 800) + '...'; // Limit base prompt to first 800 chars
+    
     return `
-${basePromptText}
+Je bent Gemini, geconfigureerd als een deskundige adviseur voor Richting, een toonaangevende arbodienst in Nederland.
+
+CORE INSTRUCTIES:
+${coreInstructions}
 
 BELANGRIJK: Je werkt nu aan een STAPSGEWIJZE analyse. Dit betekent dat je alleen Hoofdstuk ${hoofdstukNummer} genereert, niet het volledige rapport.
 
-CONTEXT VAN VOORGAANDE HOOFDSTUKKEN:
+CONTEXT:
 ${contextSummary}
 
 HUIDIGE TAAK:
@@ -2258,7 +2199,7 @@ exports.analyseBrancheStapsgewijs = (0, https_1.onRequest)({
         customerId: customerId || '',
         status: 'running',
         progress: {
-            totaal: 13,
+            totaal: 0, // Will be updated after parsing hoofdstukken from prompt
             voltooid: 0,
             huidigeStap: 0
         },
@@ -2356,6 +2297,26 @@ async function processAnalyseStapsgewijs(organisatieNaam, website, analyseId, cu
         console.error("Error fetching prompt for stapsgewijze analyse:", promptError);
         console.log("Using default prompt");
     }
+    // Parse hoofdstukken from prompt - ALLEEN uit de prompt, geen hardcoded fallback
+    let hoofdstukken = parseHoofdstukkenFromPrompt(basePrompt);
+    
+    // Als er geen hoofdstukken worden gevonden, geef een duidelijke foutmelding
+    if (!hoofdstukken || hoofdstukken.length === 0) {
+        const errorMsg = '❌ GEEN HOOFDSTUKKEN GEVONDEN IN PROMPT. De prompt moet hoofdstukken definiëren in het formaat "Hoofdstuk X: Titel".';
+        console.error(errorMsg);
+        console.error('Prompt tekst (eerste 500 karakters):', basePrompt.substring(0, 500));
+        await progressRef.update({
+            status: 'failed',
+            error: errorMsg,
+            updatedAt: admin.firestore.FieldValue.serverTimestamp()
+        });
+        res.status(400).json({ 
+            error: errorMsg,
+            details: 'De prompt moet hoofdstukken definiëren in het formaat "Hoofdstuk X: Titel" gevolgd door een beschrijving.'
+        });
+        return;
+    }
+    
     // Initialize context
     const context = {
         organisatieNaam,
@@ -2364,52 +2325,16 @@ async function processAnalyseStapsgewijs(organisatieNaam, website, analyseId, cu
         metadata: {},
         basePrompt: basePrompt
     };
-    // Hoofdstuk definities
-    const hoofdstukken = [
-        {
-            nummer: '1',
-            titel: 'Introductie en Branche-identificatie',
-            beschrijving: `- Geef een algemene beschrijving van de sector en de belangrijkste activiteiten.
-- Analyseer de actualiteiten in de branche op het gebied van mens en werk (arbeidsmarkt, trends, vacatures).
-- Identificeer de belangrijkste CAO-thema's die relevant zijn voor verzuim en arbeidsomstandigheden. Benoem de betrokken werkgevers- en werknemersorganisaties.`
-        },
-        {
-            nummer: '2',
-            titel: 'SBI-codes en Bedrijfsinformatie',
-            beschrijving: `- Toon in een tabel de relevante SBI-codes met omschrijving.
-- Analyseer de personele omvang en vestigingslocaties van de organisatie in Nederland.
-- Identificeer alle vestigingslocaties met volledige adresgegevens.
-- Presenteer in een tabel de personele aantallen per regio.`
-        },
-        {
-            nummer: '3',
-            titel: 'Arbocatalogus en Branche-RI&E',
-            beschrijving: `- Geef een overzicht van de door de branche erkende arbo-instrumenten (Arbocatalogus, Branche-RI&E), inclusief hun status en directe hyperlinks.`
-        },
-        {
-            nummer: '4',
-            titel: 'Risicocategorieën en Kwantificering',
-            beschrijving: `- Presenteer een tabel met de belangrijkste risico's, onderverdeeld in 'Psychische risico's', 'Fysieke risico's', en 'Overige'.
-- Gebruik de Fine & Kinney methodiek: Risicogetal (R) = Blootstelling (B) × Kans (W) × Effect (E)
-- Blootstelling (B): 1-10 (aantal personen blootgesteld)
-- Kans (W): 0.5, 1, 3, 6, of 10 (Fine & Kinney waarden)
-- Effect (E): 1, 3, 7, 15, of 40 (Fine & Kinney waarden)
-- Risicogetal (R) = B × W × E
-- Prioriteit: R >= 400 = 1 (Zeer hoog), R >= 200 = 2 (Hoog), R >= 100 = 3 (Middel), R >= 50 = 4 (Laag), R < 50 = 5 (Zeer laag)
-- Toon onderaan de tabel de totaaltelling van alle risicogetallen.`
-        },
-        {
-            nummer: '5',
-            titel: 'Primaire Processen in de Branche',
-            beschrijving: `- Beschrijf stapsgewijs de kernprocessen op de werkvloer die typerend zijn voor deze branche.`
-        },
-        {
-            nummer: '6',
-            titel: 'Werkzaamheden en Functies',
-            beschrijving: `- Geef een overzicht van de meest voorkomende functies, inclusief een omschrijving en voorbeelden van taken.`
-        }
-    ];
-    // Process eerste 6 hoofdstukken sequentieel (met context)
+    
+    // Update progress with actual aantal hoofdstukken
+    await progressRef.update({
+        'progress.totaal': hoofdstukken.length,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp()
+    });
+    
+    console.log(`📋 Processing ${hoofdstukken.length} hoofdstukken from prompt`);
+    
+    // Process all hoofdstukken sequentieel (met context)
     for (const hoofdstuk of hoofdstukken) {
         try {
             // Update progress
@@ -2446,7 +2371,9 @@ async function processAnalyseStapsgewijs(organisatieNaam, website, analyseId, cu
             }
             // Extract data
             const content = jsonData[`hoofdstuk${hoofdstuk.nummer}`] || jsonData.content || '';
-            const samenvatting = jsonData.samenvatting || content.substring(0, 200);
+            // OPTIMIZATION: Limit samenvatting to 50 words max for faster context passing
+            const fullSamenvatting = jsonData.samenvatting || content.substring(0, 200);
+            const samenvatting = fullSamenvatting.split(' ').slice(0, 50).join(' ');
             const keyData = extractKeyDataFromHoofdstuk(hoofdstuk.nummer, content, jsonData);
             // Update context
             context.hoofdstukken[hoofdstuk.nummer] = {
@@ -2483,188 +2410,26 @@ async function processAnalyseStapsgewijs(organisatieNaam, website, analyseId, cu
             });
         }
     }
-    // Hoofdstukken 7-9 (parallel mogelijk, maar nu sequentieel voor eenvoud)
-    const hoofdstukkenFase2 = [
-        {
-            nummer: '7',
-            titel: 'Verzuim in de Branche',
-            beschrijving: `- Analyseer het verzuim in de branche, benoem de belangrijkste oorzaken en vergelijk dit met het landelijk gemiddelde.
-- Presenteer een matrix van verzuimrisico's per functie. Gebruik de functies in de rijen en de risico's in de kolommen.
-- Verwijs naar de functies uit hoofdstuk 6 en risico's uit hoofdstuk 4.`
-        },
-        {
-            nummer: '8',
-            titel: 'Beroepsziekten in de Branche',
-            beschrijving: `- Analyseer de meest voorkomende beroepsziekten en koppel deze direct aan de geïdentificeerde risico's uit hoofdstuk 4.
-- Gebruik EXACT dezelfde risico namen als in hoofdstuk 4.`
-        },
-        {
-            nummer: '9',
-            titel: 'Gevaarlijke Stoffen en Risico\'s',
-            beschrijving: `- Indien van toepassing, beschrijf de gevaarlijke stoffen die in de sector worden gebruikt.
-- Presenteer een matrix die de risico's bij de hantering van deze stoffen weergeeft.`
-        }
-    ];
-    for (const hoofdstuk of hoofdstukkenFase2) {
-        try {
-            await progressRef.update({
-                [`hoofdstukken.${hoofdstuk.nummer}`]: {
-                    status: 'running',
-                    timestamp: admin.firestore.FieldValue.serverTimestamp()
-                },
-                'progress.huidigeStap': parseInt(hoofdstuk.nummer),
-                updatedAt: admin.firestore.FieldValue.serverTimestamp()
-            });
-            const prompt = generateHoofdstukPrompt(hoofdstuk.nummer, hoofdstuk.titel, hoofdstuk.beschrijving, context);
-            const result = await model.generateContent(prompt);
-            const response = await result.response;
-            let jsonStr = response.text();
-            jsonStr = jsonStr.replace(/```json/g, '').replace(/```/g, '').trim();
-            const jsonMatch = jsonStr.match(/\{[\s\S]*\}/);
-            if (jsonMatch) {
-                jsonStr = jsonMatch[0];
-            }
-            let jsonData;
-            try {
-                jsonData = JSON.parse(jsonStr);
-            }
-            catch (parseError) {
-                jsonStr = jsonStr.replace(/\\n/g, ' ').replace(/\\"/g, '"');
-                jsonData = JSON.parse(jsonStr);
-            }
-            const content = jsonData[`hoofdstuk${hoofdstuk.nummer}`] || jsonData.content || '';
-            const samenvatting = jsonData.samenvatting || content.substring(0, 200);
-            context.hoofdstukken[hoofdstuk.nummer] = {
-                titel: hoofdstuk.titel,
-                content,
-                samenvatting,
-                keyData: {}
-            };
-            await progressRef.update({
-                [`hoofdstukken.${hoofdstuk.nummer}`]: {
-                    status: 'completed',
-                    content,
-                    timestamp: admin.firestore.FieldValue.serverTimestamp()
-                },
-                'progress.voltooid': admin.firestore.FieldValue.increment(1),
-                updatedAt: admin.firestore.FieldValue.serverTimestamp()
-            });
-            console.log(`✅ Hoofdstuk ${hoofdstuk.nummer} voltooid`);
-        }
-        catch (error) {
-            console.error(`❌ Error in hoofdstuk ${hoofdstuk.nummer}:`, error);
-            await progressRef.update({
-                [`hoofdstukken.${hoofdstuk.nummer}`]: {
-                    status: 'failed',
-                    error: error.message,
-                    timestamp: admin.firestore.FieldValue.serverTimestamp()
-                },
-                updatedAt: admin.firestore.FieldValue.serverTimestamp()
-            });
-        }
-    }
-    // Hoofdstukken 10-12 (vereisen alle voorgaande hoofdstukken)
-    const hoofdstukkenFase3 = [
-        {
-            nummer: '10',
-            titel: 'Risicomatrices',
-            beschrijving: `- Matrix 1: Risico's per Primair Proces. Gebruik EXACT de processen uit hoofdstuk 5 en risico's uit hoofdstuk 4.
-- Matrix 2: Risico's per Functie. Gebruik EXACT de functies uit hoofdstuk 6 en risico's uit hoofdstuk 4.
-- Gebruik visuele symbolen (● voor 'hoog', ◐ voor 'gemiddeld', ○ voor 'laag').`
-        },
-        {
-            nummer: '11',
-            titel: 'Vooruitblik en Speerpunten',
-            beschrijving: `- Analyseer het verwachte effect van CAO-thema's op o.a. verzuim, verloop en aantrekkingskracht op de arbeidsmarkt.
-- Formuleer concrete speerpunten voor de ondernemer om verzuim positief te beïnvloeden en te prioriteren.
-- Benoem de gezamenlijke thema's die de ondernemer samen met Richting kan oppakken. Koppel elk speerpunt direct aan een specifieke dienst van Richting met een hyperlink.`
-        },
-        {
-            nummer: '12',
-            titel: 'Stappenplan voor een Preventieve Samenwerking',
-            beschrijving: `- Integreer de visuele weergave van het "Stappenplan Samenwerken aan preventie".
-- Presenteer een concreet en op maat gemaakt stappenplan voor de organisatie, gebaseerd op de analyse. Begin altijd met Implementatie en Verzuimbegeleiding.
-- Doe voorstellen voor specifieke diensten van Richting (RI&E, PMO, Werkplekonderzoek, Het Richtinggevende Gesprek, etc.) met directe hyperlinks naar de relevante webpagina's.`
-        },
-        {
-            nummer: '13',
-            titel: 'Bronvermeldingen',
-            beschrijving: `- Geef een volledige lijst van geraadpleegde bronnen, opgemaakt in APA-stijl, met directe en werkende hyperlinks.
-- Geen Google search links, alleen directe URL's.`
-        }
-    ];
-    for (const hoofdstuk of hoofdstukkenFase3) {
-        try {
-            await progressRef.update({
-                [`hoofdstukken.${hoofdstuk.nummer}`]: {
-                    status: 'running',
-                    timestamp: admin.firestore.FieldValue.serverTimestamp()
-                },
-                'progress.huidigeStap': parseInt(hoofdstuk.nummer),
-                updatedAt: admin.firestore.FieldValue.serverTimestamp()
-            });
-            const prompt = generateHoofdstukPrompt(hoofdstuk.nummer, hoofdstuk.titel, hoofdstuk.beschrijving, context);
-            const result = await model.generateContent(prompt);
-            const response = await result.response;
-            let jsonStr = response.text();
-            jsonStr = jsonStr.replace(/```json/g, '').replace(/```/g, '').trim();
-            const jsonMatch = jsonStr.match(/\{[\s\S]*\}/);
-            if (jsonMatch) {
-                jsonStr = jsonMatch[0];
-            }
-            let jsonData;
-            try {
-                jsonData = JSON.parse(jsonStr);
-            }
-            catch (parseError) {
-                jsonStr = jsonStr.replace(/\\n/g, ' ').replace(/\\"/g, '"');
-                jsonData = JSON.parse(jsonStr);
-            }
-            const content = jsonData[`hoofdstuk${hoofdstuk.nummer}`] || jsonData.content || '';
-            const samenvatting = jsonData.samenvatting || content.substring(0, 200);
-            context.hoofdstukken[hoofdstuk.nummer] = {
-                titel: hoofdstuk.titel,
-                content,
-                samenvatting,
-                keyData: {}
-            };
-            await progressRef.update({
-                [`hoofdstukken.${hoofdstuk.nummer}`]: {
-                    status: 'completed',
-                    content,
-                    timestamp: admin.firestore.FieldValue.serverTimestamp()
-                },
-                'progress.voltooid': admin.firestore.FieldValue.increment(1),
-                updatedAt: admin.firestore.FieldValue.serverTimestamp()
-            });
-            console.log(`✅ Hoofdstuk ${hoofdstuk.nummer} voltooid`);
-        }
-        catch (error) {
-            console.error(`❌ Error in hoofdstuk ${hoofdstuk.nummer}:`, error);
-            await progressRef.update({
-                [`hoofdstukken.${hoofdstuk.nummer}`]: {
-                    status: 'failed',
-                    error: error.message,
-                    timestamp: admin.firestore.FieldValue.serverTimestamp()
-                },
-                updatedAt: admin.firestore.FieldValue.serverTimestamp()
-            });
-        }
-    }
+    
     // Synthesis stap: Combineer alle hoofdstukken tot één coherent rapport
     try {
+        const aantalHoofdstukken = Object.keys(context.hoofdstukken).length;
         await progressRef.update({
-            'progress.huidigeStap': 14,
+            'progress.huidigeStap': aantalHoofdstukken + 1,
             updatedAt: admin.firestore.FieldValue.serverTimestamp()
         });
+        // OPTIMIZATION: For synthesis, include full content but limit to essential parts
+        const hoofdstukkenContent = Object.keys(context.hoofdstukken).sort().map((key) => {
+            const h = context.hoofdstukken[key];
+            // For synthesis, we need full content but can optimize formatting
+            return `\n## Hoofdstuk ${key}: ${h.titel}\n${h.content}`;
+        }).join('\n\n');
+        
         const synthesisPrompt = `
-Je hebt een organisatieanalyse uitgevoerd in 13 hoofdstukken voor ${organisatieNaam}.
+Je hebt een organisatieanalyse uitgevoerd in ${aantalHoofdstukken} hoofdstukken voor ${organisatieNaam}.
 
 ALLE HOOFDSTUKKEN:
-${Object.keys(context.hoofdstukken).sort().map((key) => {
-            const h = context.hoofdstukken[key];
-            return `\n## Hoofdstuk ${key}: ${h.titel}\n${h.content}`;
-        }).join('\n\n')}
+${hoofdstukkenContent}
 
 TAAK:
 1. Combineer alle hoofdstukken tot één coherent, volledig markdown rapport
@@ -2688,16 +2453,65 @@ Geef het volledige rapport terug in markdown formaat. Geef ALLEEN het rapport, g
         const processen = context.hoofdstukken['5']?.keyData?.processen || [];
         const functies = context.hoofdstukken['6']?.keyData?.functies || [];
         const sbiCodes = context.hoofdstukken['2']?.keyData?.sbiCodes || [];
-        const locaties = context.hoofdstukken['2']?.keyData?.locaties || [];
+        // Locaties kunnen in hoofdstuk 1 of 2 zitten (afhankelijk van prompt)
+        const locaties = context.hoofdstukken['1']?.keyData?.locaties || 
+                        context.hoofdstukken['2']?.keyData?.locaties || [];
         // Calculate scores
         const totaalScore = risicos.reduce((sum, r) => sum + (r.risicogetal || 0), 0);
         const gemiddeldeRisicoScore = risicos.length > 0 ? totaalScore / risicos.length : 0;
-        // Save final result
+        
+        // Save locaties to Firestore if customerId provided and locaties found
+        if (customerId && locaties && locaties.length > 0) {
+            try {
+                // Get Richting locations for matching
+                const richtingLocationsRef = db.collection('richtingLocaties');
+                const richtingLocationsSnapshot = await richtingLocationsRef.get();
+                const richtingLocations = richtingLocationsSnapshot.docs.map(doc => ({
+                    id: doc.id,
+                    ...doc.data()
+                }));
+                
+                // Process and save each location
+                const batch = db.batch();
+                for (const locatie of locaties) {
+                    // Find nearest Richting location
+                    let richtingLocatieNaam = null;
+                    if (locatie.stad) {
+                        const nearestRichting = findNearestRichtingLocation(locatie.stad, richtingLocations);
+                        if (nearestRichting) {
+                            richtingLocatieNaam = nearestRichting;
+                            console.log(`📍 Matched Richting locatie "${nearestRichting}" for "${locatie.naam}" in ${locatie.stad}`);
+                        }
+                    }
+                    
+                    // Create location document
+                    const locRef = db.collection('locations').doc();
+                    batch.set(locRef, {
+                        customerId: customerId,
+                        name: locatie.naam || locatie.name || 'Onbekende locatie',
+                        address: locatie.adres || locatie.address || '',
+                        city: locatie.stad || locatie.city || '',
+                        employeeCount: locatie.aantalMedewerkers ?? locatie.aantal ?? null,
+                        richtingLocatieNaam: richtingLocatieNaam,
+                        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+                        updatedAt: admin.firestore.FieldValue.serverTimestamp()
+                    });
+                }
+                await batch.commit();
+                console.log(`💾 Saved ${locaties.length} locaties to Firestore for customer ${customerId}`);
+            }
+            catch (saveError) {
+                console.error('❌ Error saving locaties to Firestore:', saveError);
+                // Don't fail the entire analysis if location saving fails
+            }
+        }
+        
+        // Save final result (aantalHoofdstukken already declared above)
         await progressRef.update({
             volledigRapport,
             status: 'completed',
-            'progress.voltooid': 13,
-            'progress.huidigeStap': 13,
+            'progress.voltooid': aantalHoofdstukken,
+            'progress.huidigeStap': aantalHoofdstukken,
             updatedAt: admin.firestore.FieldValue.serverTimestamp()
         });
         // Also save as OrganisatieProfiel if customerId provided

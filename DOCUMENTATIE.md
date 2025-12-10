@@ -397,3 +397,4 @@ firebase deploy --only functions:analyseBrancheStapsgewijs
 **Laatste update**: 9 december 2025  
 **Versie**: 1.0
 
+

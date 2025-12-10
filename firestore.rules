@@ -32,8 +32,7 @@ service cloud.firestore {
       allow read: if isOwner(userId);
       
       // Admins can read all users
-      allow read: if isAdmin();Llafnp2025!
-      
+      allow read: if isAdmin();
       
       // Users can create their own document (during registration)
       allow create: if isOwner(userId);
@@ -198,6 +197,15 @@ service cloud.firestore {
       
       // Only Admins can delete
       allow delete: if isAdmin();
+    }
+    
+    // Settings collection (Application settings like logo)
+    match /settings/{settingId} {
+      // Authenticated users can read all settings
+      allow read: if isAuthenticated();
+      
+      // Only Admins can create/update/delete settings
+      allow create, update, delete: if isAdmin();
     }
     
     // Default: deny all other access

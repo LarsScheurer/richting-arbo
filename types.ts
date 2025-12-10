@@ -32,6 +32,19 @@ export interface Location {
   name: string; // e.g. "Hoofdkantoor"
   address: string;
   city: string;
+  employeeCount?: number; // Aantal medewerkers op deze locatie
+  latitude?: number; // Geocodeerde latitude
+  longitude?: number; // Geocodeerde longitude
+  richtingLocatieId?: string; // ID van dichtstbijzijnde Richting locatie
+  richtingLocatieNaam?: string; // Naam van dichtstbijzijnde Richting locatie
+}
+
+export interface KlantreisLevel {
+  level: 1 | 2 | 3;
+  name: string;
+  status: 'not_started' | 'in_progress' | 'completed';
+  completedAt?: string;
+  resultData?: any; // Store the analysis results
 }
 
 export interface Customer {
@@ -43,6 +56,11 @@ export interface Customer {
   logoUrl?: string;
   assignedUserIds: string[]; // List of users who have access to this client
   createdAt: string;
+  klantreis?: {
+    levels: KlantreisLevel[];
+    socialControlsScore?: number; // Final score (0-100)
+    lastUpdated?: string;
+  };
 }
 
 export enum DocType {

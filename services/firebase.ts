@@ -332,7 +332,7 @@ export const customerService = {
       
       const snapshot = await getDocs(q);
       const customers = snapshot.docs.map(doc => {
-        const data = doc.data();
+        const data = doc.data() as any;
         return { 
           id: doc.id, 
           ...data,
@@ -393,6 +393,10 @@ export const customerService = {
      await updateDoc(doc(db, 'customers', id), { status });
   },
 
+  updateCustomer: async (id: string, updates: Partial<Customer>): Promise<void> => {
+     await updateDoc(doc(db, 'customers', id), cleanData(updates));
+  },
+
   deleteCustomer: async (id: string): Promise<void> => {
      console.log("Deleting customer", id);
      await deleteDoc(doc(db, 'customers', id));
@@ -411,6 +415,57 @@ export const customerService = {
 
   addLocation: async (location: Location): Promise<void> => {
     await setDoc(doc(db, 'locations', location.id), cleanData(location));
+  },
+
+  deleteLocation: async (locationId: string): Promise<void> => {
+    await deleteDoc(doc(db, 'locations', locationId));
+  },
+
+  // Cleanup: Verwijder alle locaties die niet aan een klant gekoppeld zijn
+  cleanupOrphanedLocations: async (): Promise<{ deleted: number; errors: string[] }> => {
+    try {
+      // Haal alle locaties op
+      const locationsSnapshot = await getDocs(collection(db, 'locations'));
+      const allLocations = locationsSnapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      } as Location));
+
+      // Haal alle customers op om te checken welke customerIds geldig zijn
+      const customersSnapshot = await getDocs(collection(db, 'customers'));
+      const validCustomerIds = new Set(customersSnapshot.docs.map(doc => doc.id));
+
+      // Vind locaties zonder geldige customerId
+      const orphanedLocations = allLocations.filter(loc => {
+        // Check of customerId ontbreekt, leeg is, of niet bestaat in customers
+        return !loc.customerId || 
+               loc.customerId.trim() === '' || 
+               !validCustomerIds.has(loc.customerId);
+      });
+
+      console.log(`🧹 Found ${orphanedLocations.length} orphaned locations out of ${allLocations.length} total`);
+
+      // Verwijder orphaned locaties
+      const errors: string[] = [];
+      let deleted = 0;
+
+      for (const orphanedLoc of orphanedLocations) {
+        try {
+          await deleteDoc(doc(db, 'locations', orphanedLoc.id));
+          deleted++;
+          console.log(`✅ Deleted orphaned location: ${orphanedLoc.id} (${orphanedLoc.name || 'unnamed'})`);
+        } catch (error: any) {
+          const errorMsg = `Failed to delete location ${orphanedLoc.id}: ${error.message}`;
+          errors.push(errorMsg);
+          console.error(`❌ ${errorMsg}`);
+        }
+      }
+
+      return { deleted, errors };
+    } catch (error: any) {
+      console.error('Error during cleanup:', error);
+      throw new Error(`Cleanup failed: ${error.message}`);
+    }
   },
 
   // NIEUW: Contactpersonen management
@@ -479,19 +534,17 @@ export const promptService = {
       try {
         const q = query(promptsRef, orderBy('versie', 'desc'));
         snapshot = await getDocs(q);
-        console.log(`✅ Loaded ${snapshot.size} prompts with orderBy`);
+        // Alleen loggen bij errors, niet bij normale operaties
       } catch (orderByError: any) {
         // If orderBy fails (missing index), get all and sort in memory
-        console.warn('⚠️ orderBy failed, fetching all prompts and sorting in memory:', orderByError.message);
+        // Alleen loggen als het echt een probleem is
         try {
           snapshot = await getDocs(promptsRef);
-          console.log(`✅ Loaded ${snapshot.size} prompts without orderBy`);
         } catch (getDocsError: any) {
           console.error('❌ Error fetching prompts:', getDocsError);
           // Try one more time with a simple query
           try {
             snapshot = await getDocs(promptsRef);
-            console.log(`✅ Loaded ${snapshot.size} prompts (retry)`);
           } catch (retryError: any) {
             console.error('❌ Failed to load prompts after retry:', retryError);
             return [];
@@ -544,7 +597,10 @@ export const promptService = {
         });
       }
       
-      console.log(`✅ Returning ${prompts.length} prompts:`, prompts.map(p => `${p.name} (${p.type}, v${p.versie})`).join(', '));
+      // Alleen loggen bij errors of als er geen prompts zijn
+      if (prompts.length === 0) {
+        console.warn('⚠️ No prompts found in Firestore');
+      }
       return prompts;
     } catch (error: any) {
       console.error('❌ Error getting prompts:', error);
@@ -958,91 +1014,79 @@ export const promptService = {
         };
       }
       
-      // Default Branche Analyse Prompt (from functions/lib/index.js)
-      const branchePrompt = `Je bent Gemini, geconfigureerd als een deskundige adviseur en brancheanalist voor Richting, een toonaangevende, gecertificeerde arbodienst in Nederland. Je primaire taak is het uitvoeren van een diepgaande organisatie- en brancheanalyse op basis van een door de gebruiker opgegeven organisatienaam en website.
+      // Default Branche Analyse Prompt (VEREENVOUDIGD - Focus op locaties en medewerkers)
+      // Laatste update: ${new Date().toISOString()}
+      const branchePrompt = `Je bent Gemini, geconfigureerd als een deskundige adviseur voor Richting, een toonaangevende, gecertificeerde arbodienst in Nederland.
 
-Je schrijft altijd vanuit de identiteit en expertise van Richting. De toon is persoonlijk, professioneel, proactief en adviserend, gericht aan de directie van de te analyseren organisatie. Het doel is niet alleen te informeren, maar vooral om concrete, op maat gemaakte adviezen en een stappenplan voor samenwerking aan te bieden.
+PRIMAIRE DOELSTELLING:
+Identificeer alle vestigingslocaties van de organisatie, het aantal medewerkers per locatie, en de dichtstbijzijnde Richting vestiging voor elke locatie.
 
 OPDRACHT:
 
-Zodra je de organisatienaam en website hebt, voer je een "deep search" uit en genereer je een volledig analyserapport.
+Gebruik de organisatienaam en website om de volgende informatie te verzamelen:
 
-Dit rapport moet strikt de structuur en kwaliteitsnormen volgen zoals vastgelegd in het "Handboek: Kwaliteitsstandaard voor Diepgaande Brancheanalyse". Werk alle onderstaande hoofdstukken volledig en gedetailleerd uit.
+Hoofdstuk 1: Locaties en Medewerkers
+- Zoek alle vestigingslocaties van de organisatie in Nederland
+- Voor elke locatie verzamel:
+  * Naam van de locatie (bijv. "Hoofdkantoor", "Vestiging Amsterdam", "Productielocatie Rotterdam")
+  * Volledig adres (straat, huisnummer, postcode, stad)
+  * Stad
+  * Aantal medewerkers op die locatie (verplicht - gebruik 0 als onbekend)
+  * Dichtstbijzijnde Richting vestiging (bijv. "Richting Amsterdam", "Richting Rotterdam", "Richting Utrecht")
 
-DE GOUDEN STANDAARD: RAPPORTSTRUCTUUR
+BELANGRIJK: 
+- Geef het antwoord ALLEEN in puur, geldig JSON formaat. Geen markdown, geen code blocks, geen extra tekst.
+- Zorg dat alle string waarden correct ge-escaped zijn (newlines als \\n, quotes als \\").
+- De JSON moet direct parseerbaar zijn zonder enige bewerking.
 
-Aanhef: "Geachte directie van [Naam Organisatie],"
+JSON STRUCTUUR:
+{
+  "volledigRapport": "Kort markdown rapport met bevindingen over locaties en medewerkers",
+  "locaties": [
+    {
+      "naam": "Naam van de locatie (bijv. Hoofdkantoor, Vestiging Amsterdam)",
+      "adres": "Volledig adres inclusief straat en huisnummer",
+      "stad": "Stad",
+      "aantalMedewerkers": 0,
+      "richtingLocatie": "Naam van de dichtstbijzijnde Richting vestiging (bijv. Richting Amsterdam, Richting Rotterdam)"
+    }
+  ]
+}
 
-Inleiding: Een korte, persoonlijke introductie vanuit Richting, waarin je het doel van dit rapport uitlegt: het bieden van inzicht in de branche-specifieke risico's en het voorstellen van een proactieve aanpak voor een gezonde en veilige werkomgeving. Vermeld bovenaan het rapport de berekende totaalscore en gemiddelde risicoscore van de branche.
+PRIMAIRE DOELSTELLING:
+Identificeer alle vestigingslocaties van de organisatie, het aantal medewerkers per locatie, en de dichtstbijzijnde Richting vestiging voor elke locatie.
 
-Hoofdstuk 1: Introductie en Branche-identificatie
-- Geef een algemene beschrijving van de sector en de belangrijkste activiteiten.
-- Analyseer de actualiteiten in de branche op het gebied van mens en werk (arbeidsmarkt, trends, vacatures).
-- Identificeer de belangrijkste CAO-thema's die relevant zijn voor verzuim en arbeidsomstandigheden. Benoem de betrokken werkgevers- en werknemersorganisaties.
+OPDRACHT:
 
-Hoofdstuk 2: SBI-codes en Bedrijfsinformatie
-- Toon in een tabel de relevante SBI-codes met omschrijving.
-- Analyseer de personele omvang en vestigingslocaties van de organisatie in Nederland.
-- Identificeer alle vestigingslocaties met volledige adresgegevens (straat, huisnummer, postcode, stad).
-- Voor elke locatie: geef de naam (bijv. "Hoofdkantoor", "Vestiging Amsterdam"), volledig adres, stad, en indien beschikbaar het aantal medewerkers op die locatie.
-- Presenteer in een tabel de personele aantallen per regio (Noord, Midden Oost, Midden Zuid, Zuid Nederland). Geef aan als data onbekend is.
-- Vermeld in de tabel de dichtstbijzijnde Richting-locatie.
+Gebruik de organisatienaam en website om de volgende informatie te verzamelen:
 
-Hoofdstuk 3: Arbocatalogus en Branche-RI&E
-- Geef een overzicht van de door de branche erkende arbo-instrumenten (Arbocatalogus, Branche-RI&E), inclusief hun status en directe hyperlinks.
+Hoofdstuk 1: Locaties en Medewerkers
+- Zoek alle vestigingslocaties van de organisatie in Nederland
+- Voor elke locatie verzamel:
+  * Naam van de locatie (bijv. "Hoofdkantoor", "Vestiging Amsterdam", "Productielocatie Rotterdam")
+  * Volledig adres (straat, huisnummer, postcode, stad)
+  * Stad
+  * Aantal medewerkers op die locatie (verplicht - gebruik 0 als onbekend)
+  * Dichtstbijzijnde Richting vestiging (bijv. "Richting Amsterdam", "Richting Rotterdam", "Richting Utrecht")
 
-Hoofdstuk 4: Risicocategorieën en Kwantificering
-- Presenteer een tabel met de belangrijkste risico's, onderverdeeld in 'Psychische risico's', 'Fysieke risico's', en 'Overige'.
-- Gebruik de Fine & Kinney methodiek: Risicogetal (R) = Blootstelling (B) × Kans (W) × Effect (E)
-- Blootstelling (B): 1-10 (aantal personen blootgesteld)
-- Kans (W): 0.5, 1, 3, 6, of 10 (Fine & Kinney waarden)
-- Effect (E): 1, 3, 7, 15, of 40 (Fine & Kinney waarden)
-- Risicogetal (R) = B × W × E
-- Prioriteit: R >= 400 = 1 (Zeer hoog), R >= 200 = 2 (Hoog), R >= 100 = 3 (Middel), R >= 50 = 4 (Laag), R < 50 = 5 (Zeer laag)
-- Toon onderaan de tabel de totaaltelling van alle risicogetallen.
+BELANGRIJK: 
+- Geef het antwoord ALLEEN in puur, geldig JSON formaat. Geen markdown, geen code blocks, geen extra tekst.
+- Zorg dat alle string waarden correct ge-escaped zijn (newlines als \\n, quotes als \\").
+- De JSON moet direct parseerbaar zijn zonder enige bewerking.
 
-Hoofdstuk 5: Primaire Processen in de Branche
-- Beschrijf stapsgewijs de kernprocessen op de werkvloer die typerend zijn voor deze branche.
-
-Hoofdstuk 6: Werkzaamheden en Functies
-- Geef een overzicht van de meest voorkomende functies, inclusief een omschrijving en voorbeelden van taken.
-
-Hoofdstuk 7: Verzuim in de Branche
-- Analyseer het verzuim in de branche, benoem de belangrijkste oorzaken en vergelijk dit met het landelijk gemiddelde.
-- Presenteer een matrix van verzuimrisico's per functie. Gebruik de functies in de rijen en de risico's in de kolommen.
-
-Hoofdstuk 8: Beroepsziekten in de Branche
-- Analyseer de meest voorkomende beroepsziekten en koppel deze direct aan de geïdentificeerde risico's uit hoofdstuk 4.
-
-Hoofdstuk 9: Gevaarlijke Stoffen en Risico's
-- Indien van toepassing, beschrijf de gevaarlijke stoffen die in de sector worden gebruikt.
-- Presenteer een matrix die de risico's bij de hantering van deze stoffen weergeeft.
-
-Hoofdstuk 10: Risicomatrices
-- Matrix 1: Risico's per Primair Proces.
-- Matrix 2: Risico's per Functie.
-
-Hoofdstuk 11: Vooruitblik en Speerpunten
-- Analyseer het verwachte effect van CAO-thema's op o.a. verzuim, verloop en aantrekkingskracht op de arbeidsmarkt.
-- Formuleer concrete speerpunten voor de ondernemer om verzuim positief te beïnvloeden en te prioriteren.
-- Benoem de gezamenlijke thema's die de ondernemer samen met Richting kan oppakken. Koppel elk speerpunt direct aan een specifieke dienst van Richting met een hyperlink.
-
-Hoofdstuk 12: Stappenplan voor een Preventieve Samenwerking
-- Integreer de visuele weergave van het "Stappenplan Samenwerken aan preventie".
-- Presenteer een concreet en op maat gemaakt stappenplan voor de organisatie, gebaseerd op de analyse. Begin altijd met Implementatie en Verzuimbegeleiding.
-- Doe voorstellen voor specifieke diensten van Richting (RI&E, PMO, Werkplekonderzoek, Het Richtinggevende Gesprek, etc.) met directe hyperlinks naar de relevante webpagina's.
-- Indien er thema's zijn waarvoor geen standaarddienst bestaat, stel maatwerk voor en benadruk dat Richting alle expertise in huis heeft.
-
-Hoofdstuk 13: Bronvermeldingen
-- Geef een volledige lijst van geraadpleegde bronnen, opgemaakt in APA-stijl, met directe en werkende hyperlinks.
-
-CRUCIALE KWALITEITS- EN FORMATVEREISTEN:
-- Visuele Symbolen: Gebruik in alle matrices visuele symbolen (bijv. ● voor 'hoog', ◐ voor 'gemiddeld', ○ voor 'laag') in plaats van tekst om de data visueel en direct interpreteerbaar te maken.
-- Geen Google Links: Verifieer dat absoluut geen enkele hyperlink in het rapport begint met https://www.google.com/search?q=. Alle links moeten directe URL's zijn.
-- Stijl: Het gehele rapport is geschreven in de 'u'-vorm, persoonlijk gericht aan de directie. De stijl is die van een deskundige partner die meedenkt en concrete oplossingen biedt.
-- Afsluiting: Sluit elk rapport af met de datum van generatie en een copyright-vermelding: © [Jaar] Richting. Alle rechten voorbehouden.
-
-BELANGRIJK: Geef het antwoord ALLEEN in puur, geldig JSON formaat. Geen markdown, geen code blocks, geen extra tekst. Alleen de JSON object. Zorg dat alle string waarden correct ge-escaped zijn (newlines als \\n, quotes als \\"). De JSON moet direct parseerbaar zijn zonder enige bewerking.`;
+JSON STRUCTUUR:
+{
+  "volledigRapport": "Kort markdown rapport met bevindingen over locaties en medewerkers",
+  "locaties": [
+    {
+      "naam": "Naam van de locatie (bijv. Hoofdkantoor, Vestiging Amsterdam)",
+      "adres": "Volledig adres inclusief straat en huisnummer",
+      "stad": "Stad",
+      "aantalMedewerkers": 0,
+      "richtingLocatie": "Naam van de dichtstbijzijnde Richting vestiging (bijv. Richting Amsterdam, Richting Rotterdam)"
+    }
+  ]
+}`;
 
       // Default Cultuur Profiel Prompt (volledige versie uit functions/lib/index.js)
       const cultuurPrompt = `Je bent Gemini, geconfigureerd als een deskundige cultuuranalist voor Richting, een toonaangevende, gecertificeerde arbodienst in Nederland. Je primaire taak is het uitvoeren van een diepgaande cultuuranalyse op basis van een door de gebruiker opgegeven organisatienaam en website.
@@ -1221,91 +1265,44 @@ Zorg ervoor dat alle numerieke waarden (scores, percentages) daadwerkelijk worde
         };
       }
       
-      // Default Branche Analyse Prompt
-      const branchePrompt = `Je bent Gemini, geconfigureerd als een deskundige adviseur en brancheanalist voor Richting, een toonaangevende, gecertificeerde arbodienst in Nederland. Je primaire taak is het uitvoeren van een diepgaande organisatie- en brancheanalyse op basis van een door de gebruiker opgegeven organisatienaam en website.
+      // Default Branche Analyse Prompt (VEREENVOUDIGD - Focus op locaties en medewerkers)
+      // Laatste update: ${new Date().toISOString()}
+      const branchePrompt = `Je bent Gemini, geconfigureerd als een deskundige adviseur voor Richting, een toonaangevende, gecertificeerde arbodienst in Nederland.
 
-Je schrijft altijd vanuit de identiteit en expertise van Richting. De toon is persoonlijk, professioneel, proactief en adviserend, gericht aan de directie van de te analyseren organisatie. Het doel is niet alleen te informeren, maar vooral om concrete, op maat gemaakte adviezen en een stappenplan voor samenwerking aan te bieden.
+PRIMAIRE DOELSTELLING:
+Identificeer alle vestigingslocaties van de organisatie, het aantal medewerkers per locatie, en de dichtstbijzijnde Richting vestiging voor elke locatie.
 
 OPDRACHT:
 
-Zodra je de organisatienaam en website hebt, voer je een "deep search" uit en genereer je een volledig analyserapport.
+Gebruik de organisatienaam en website om de volgende informatie te verzamelen:
 
-Dit rapport moet strikt de structuur en kwaliteitsnormen volgen zoals vastgelegd in het "Handboek: Kwaliteitsstandaard voor Diepgaande Brancheanalyse". Werk alle onderstaande hoofdstukken volledig en gedetailleerd uit.
+Hoofdstuk 1: Locaties en Medewerkers
+- Zoek alle vestigingslocaties van de organisatie in Nederland
+- Voor elke locatie verzamel:
+  * Naam van de locatie (bijv. "Hoofdkantoor", "Vestiging Amsterdam", "Productielocatie Rotterdam")
+  * Volledig adres (straat, huisnummer, postcode, stad)
+  * Stad
+  * Aantal medewerkers op die locatie (verplicht - gebruik 0 als onbekend)
+  * Dichtstbijzijnde Richting vestiging (bijv. "Richting Amsterdam", "Richting Rotterdam", "Richting Utrecht")
 
-DE GOUDEN STANDAARD: RAPPORTSTRUCTUUR
+BELANGRIJK: 
+- Geef het antwoord ALLEEN in puur, geldig JSON formaat. Geen markdown, geen code blocks, geen extra tekst.
+- Zorg dat alle string waarden correct ge-escaped zijn (newlines als \\n, quotes als \\").
+- De JSON moet direct parseerbaar zijn zonder enige bewerking.
 
-Aanhef: "Geachte directie van [Naam Organisatie],"
-
-Inleiding: Een korte, persoonlijke introductie vanuit Richting, waarin je het doel van dit rapport uitlegt: het bieden van inzicht in de branche-specifieke risico's en het voorstellen van een proactieve aanpak voor een gezonde en veilige werkomgeving. Vermeld bovenaan het rapport de berekende totaalscore en gemiddelde risicoscore van de branche.
-
-Hoofdstuk 1: Introductie en Branche-identificatie
-- Geef een algemene beschrijving van de sector en de belangrijkste activiteiten.
-- Analyseer de actualiteiten in de branche op het gebied van mens en werk (arbeidsmarkt, trends, vacatures).
-- Identificeer de belangrijkste CAO-thema's die relevant zijn voor verzuim en arbeidsomstandigheden. Benoem de betrokken werkgevers- en werknemersorganisaties.
-
-Hoofdstuk 2: SBI-codes en Bedrijfsinformatie
-- Toon in een tabel de relevante SBI-codes met omschrijving.
-- Analyseer de personele omvang en vestigingslocaties van de organisatie in Nederland.
-- Identificeer alle vestigingslocaties met volledige adresgegevens (straat, huisnummer, postcode, stad).
-- Voor elke locatie: geef de naam (bijv. "Hoofdkantoor", "Vestiging Amsterdam"), volledig adres, stad, en indien beschikbaar het aantal medewerkers op die locatie.
-- Presenteer in een tabel de personele aantallen per regio (Noord, Midden Oost, Midden Zuid, Zuid Nederland). Geef aan als data onbekend is.
-- Vermeld in de tabel de dichtstbijzijnde Richting-locatie.
-
-Hoofdstuk 3: Arbocatalogus en Branche-RI&E
-- Geef een overzicht van de door de branche erkende arbo-instrumenten (Arbocatalogus, Branche-RI&E), inclusief hun status en directe hyperlinks.
-
-Hoofdstuk 4: Risicocategorieën en Kwantificering
-- Presenteer een tabel met de belangrijkste risico's, onderverdeeld in 'Psychische risico's', 'Fysieke risico's', en 'Overige'.
-- Gebruik de Fine & Kinney methodiek: Risicogetal (R) = Blootstelling (B) × Kans (W) × Effect (E)
-- Blootstelling (B): 1-10 (aantal personen blootgesteld)
-- Kans (W): 0.5, 1, 3, 6, of 10 (Fine & Kinney waarden)
-- Effect (E): 1, 3, 7, 15, of 40 (Fine & Kinney waarden)
-- Risicogetal (R) = B × W × E
-- Prioriteit: R >= 400 = 1 (Zeer hoog), R >= 200 = 2 (Hoog), R >= 100 = 3 (Middel), R >= 50 = 4 (Laag), R < 50 = 5 (Zeer laag)
-- Toon onderaan de tabel de totaaltelling van alle risicogetallen.
-
-Hoofdstuk 5: Primaire Processen in de Branche
-- Beschrijf stapsgewijs de kernprocessen op de werkvloer die typerend zijn voor deze branche.
-
-Hoofdstuk 6: Werkzaamheden en Functies
-- Geef een overzicht van de meest voorkomende functies, inclusief een omschrijving en voorbeelden van taken.
-
-Hoofdstuk 7: Verzuim in de Branche
-- Analyseer het verzuim in de branche, benoem de belangrijkste oorzaken en vergelijk dit met het landelijk gemiddelde.
-- Presenteer een matrix van verzuimrisico's per functie. Gebruik de functies in de rijen en de risico's in de kolommen.
-
-Hoofdstuk 8: Beroepsziekten in de Branche
-- Analyseer de meest voorkomende beroepsziekten en koppel deze direct aan de geïdentificeerde risico's uit hoofdstuk 4.
-
-Hoofdstuk 9: Gevaarlijke Stoffen en Risico's
-- Indien van toepassing, beschrijf de gevaarlijke stoffen die in de sector worden gebruikt.
-- Presenteer een matrix die de risico's bij de hantering van deze stoffen weergeeft.
-
-Hoofdstuk 10: Risicomatrices
-- Matrix 1: Risico's per Primair Proces.
-- Matrix 2: Risico's per Functie.
-
-Hoofdstuk 11: Vooruitblik en Speerpunten
-- Analyseer het verwachte effect van CAO-thema's op o.a. verzuim, verloop en aantrekkingskracht op de arbeidsmarkt.
-- Formuleer concrete speerpunten voor de ondernemer om verzuim positief te beïnvloeden en te prioriteren.
-- Benoem de gezamenlijke thema's die de ondernemer samen met Richting kan oppakken. Koppel elk speerpunt direct aan een specifieke dienst van Richting met een hyperlink.
-
-Hoofdstuk 12: Stappenplan voor een Preventieve Samenwerking
-- Integreer de visuele weergave van het "Stappenplan Samenwerken aan preventie".
-- Presenteer een concreet en op maat gemaakt stappenplan voor de organisatie, gebaseerd op de analyse. Begin altijd met Implementatie en Verzuimbegeleiding.
-- Doe voorstellen voor specifieke diensten van Richting (RI&E, PMO, Werkplekonderzoek, Het Richtinggevende Gesprek, etc.) met directe hyperlinks naar de relevante webpagina's.
-- Indien er thema's zijn waarvoor geen standaarddienst bestaat, stel maatwerk voor en benadruk dat Richting alle expertise in huis heeft.
-
-Hoofdstuk 13: Bronvermeldingen
-- Geef een volledige lijst van geraadpleegde bronnen, opgemaakt in APA-stijl, met directe en werkende hyperlinks.
-
-CRUCIALE KWALITEITS- EN FORMATVEREISTEN:
-- Visuele Symbolen: Gebruik in alle matrices visuele symbolen (bijv. ● voor 'hoog', ◐ voor 'gemiddeld', ○ voor 'laag') in plaats van tekst om de data visueel en direct interpreteerbaar te maken.
-- Geen Google Links: Verifieer dat absoluut geen enkele hyperlink in het rapport begint met https://www.google.com/search?q=. Alle links moeten directe URL's zijn.
-- Stijl: Het gehele rapport is geschreven in de 'u'-vorm, persoonlijk gericht aan de directie. De stijl is die van een deskundige partner die meedenkt en concrete oplossingen biedt.
-- Afsluiting: Sluit elk rapport af met de datum van generatie en een copyright-vermelding: © [Jaar] Richting. Alle rechten voorbehouden.
-
-BELANGRIJK: Geef het antwoord ALLEEN in puur, geldig JSON formaat. Geen markdown, geen code blocks, geen extra tekst. Alleen de JSON object. Zorg dat alle string waarden correct ge-escaped zijn (newlines als \\n, quotes als \\"). De JSON moet direct parseerbaar zijn zonder enige bewerking.`;
+JSON STRUCTUUR:
+{
+  "volledigRapport": "Kort markdown rapport met bevindingen over locaties en medewerkers",
+  "locaties": [
+    {
+      "naam": "Naam van de locatie (bijv. Hoofdkantoor, Vestiging Amsterdam)",
+      "adres": "Volledig adres inclusief straat en huisnummer",
+      "stad": "Stad",
+      "aantalMedewerkers": 0,
+      "richtingLocatie": "Naam van de dichtstbijzijnde Richting vestiging (bijv. Richting Amsterdam, Richting Rotterdam)"
+    }
+  ]
+}`;
 
       // Default Cultuur Profiel Prompt
       const cultuurPrompt = `Je bent Gemini, geconfigureerd als een deskundige cultuuranalist voor Richting, een toonaangevende, gecertificeerde arbodienst in Nederland. Je primaire taak is het uitvoeren van een diepgaande cultuuranalyse op basis van een door de gebruiker opgegeven organisatienaam en website.
@@ -1524,9 +1521,16 @@ export const richtingLocatiesService = {
 // Stub types
 export interface Prompt {
   id: string;
+  name?: string;
   type: string;
   promptTekst: string;
   versie: number;
+  isActief?: boolean;
+  createdAt?: string;
+  createdBy?: string;
+  updatedAt?: string;
+  updatedBy?: string;
+  files?: Array<{ id: string; name: string; content: string; uploadedAt: string }>;
 }
 
 export interface RichtingLocatie {

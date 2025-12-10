@@ -301,20 +301,434 @@ const AuthView: React.FC<AuthViewProps> = ({ onLogin, onGoogleLogin, onRegister,
   );
 };
 
+// KlantreisView Component
+const KlantreisView = ({
+  customer,
+  user,
+  onBack,
+  onUpdate,
+  onComplete
+}: {
+  customer: Customer;
+  user: User;
+  onBack: () => void;
+  onUpdate: (updated: Customer) => void;
+  onComplete: () => void;
+}) => {
+  const [klantreis, setKlantreis] = useState(customer.klantreis || {
+    levels: [
+      { level: 1, name: 'Publiek Organisatie Profiel', status: 'not_started' as const },
+      { level: 2, name: 'Publiek Risico Profiel', status: 'not_started' as const },
+      { level: 3, name: 'Publiek Cultuur Profiel', status: 'not_started' as const }
+    ],
+    lastUpdated: new Date().toISOString()
+  });
+  
+  const [analyzingLevel, setAnalyzingLevel] = useState<1 | 2 | 3 | null>(null);
+  const [levelResults, setLevelResults] = useState<{[key: number]: any}>({});
+  // Progress tracking for Level 1 (Publiek Organisatie Profiel)
+  const [analyseStap, setAnalyseStap] = useState(0);
+  const [hoofdstukkenResultaten, setHoofdstukkenResultaten] = useState<{[key: string]: string}>({});
+  const hoofdstukTitels: {[key: string]: string} = {
+    '1': 'Introductie en Branche-identificatie',
+    '2': 'SBI-codes en Bedrijfsinformatie',
+    '3': 'Arbocatalogus en Branche-RI&E',
+    '4': 'Risicocategorieën en Kwantificering',
+    '5': 'Primaire Processen in de Branche',
+    '6': 'Werkzaamheden en Functies',
+    '7': 'Verzuim in de Branche',
+    '8': 'Beroepsziekten in de Branche',
+    '9': 'Gevaarlijke Stoffen en Risico\'s',
+    '10': 'Risicomatrices',
+    '11': 'Vooruitblik en Speerpunten',
+    '12': 'Stappenplan voor een Preventieve Samenwerking',
+    '13': 'Bronvermeldingen'
+  };
+  
+  // Initialize klantreis if it doesn't exist
+  useEffect(() => {
+    if (!customer.klantreis) {
+      const initialKlantreis = {
+        levels: [
+          { level: 1 as const, name: 'Publiek Organisatie Profiel', status: 'not_started' as const },
+          { level: 2 as const, name: 'Publiek Risico Profiel', status: 'not_started' as const },
+          { level: 3 as const, name: 'Publiek Cultuur Profiel', status: 'not_started' as const }
+        ],
+        lastUpdated: new Date().toISOString()
+      };
+      setKlantreis(initialKlantreis);
+      // Save to customer
+      customerService.updateCustomer(customer.id, { klantreis: initialKlantreis }).then(() => {
+        onUpdate({ ...customer, klantreis: initialKlantreis });
+      });
+    }
+  }, [customer]);
+
+  const updateLevelStatus = async (level: 1 | 2 | 3, status: 'not_started' | 'in_progress' | 'completed', resultData?: any) => {
+    const updatedLevels = klantreis.levels.map(l => 
+      l.level === level 
+        ? { ...l, status, completedAt: status === 'completed' ? new Date().toISOString() : l.completedAt, resultData }
+        : l
+    );
+    
+    const updatedKlantreis = {
+      ...klantreis,
+      levels: updatedLevels,
+      lastUpdated: new Date().toISOString()
+    };
+    
+    setKlantreis(updatedKlantreis);
+    
+    // Save to customer
+    const updatedCustomer = { ...customer, klantreis: updatedKlantreis };
+    await customerService.updateCustomer(customer.id, { klantreis: updatedKlantreis });
+    onUpdate(updatedCustomer);
+    
+    if (resultData) {
+      setLevelResults(prev => ({ ...prev, [level]: resultData }));
+    }
+  };
+
+  const startLevel1 = async () => {
+    setAnalyzingLevel(1);
+    await updateLevelStatus(1, 'in_progress');
+    setAnalyseStap(0);
+    setHoofdstukkenResultaten({});
+    
+    try {
+      const functionsUrl = 'https://europe-west4-richting-sales-d764a.cloudfunctions.net/analyseBrancheStapsgewijs';
+      const response = await fetch(functionsUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          organisatieNaam: customer.name,
+          website: customer.website || '',
+          customerId: customer.id,
+          userId: user.id
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const data = await response.json();
+      const analyseId = data.analyseId;
+      // Poll for completion and progress (per hoofdstuk)
+      const progressUrl = 'https://europe-west4-richting-sales-d764a.cloudfunctions.net/getAnalyseProgress';
+      const pollInterval = setInterval(async () => {
+        try {
+          const progressResponse = await fetch(`${progressUrl}?analyseId=${analyseId}`);
+          if (!progressResponse.ok) {
+            clearInterval(pollInterval);
+            return;
+          }
+          
+          const progress = await progressResponse.json();
+          
+          // Update stap en tussentijdse hoofdstukken
+          setAnalyseStap(progress.progress.huidigeStap || 0);
+          const nieuweResultaten: {[key: string]: string} = {};
+          Object.keys(progress.hoofdstukken || {}).forEach(key => {
+            const hoofdstuk = progress.hoofdstukken[key];
+            if (hoofdstuk.status === 'completed' && hoofdstuk.content) {
+              nieuweResultaten[key] = hoofdstuk.content;
+            }
+          });
+          setHoofdstukkenResultaten(nieuweResultaten);
+          
+          if (progress.progress.status === 'completed') {
+            clearInterval(pollInterval);
+            setAnalyzingLevel(null);
+            await updateLevelStatus(1, 'completed', progress.progress);
+            setLevelResults(prev => ({ ...prev, 1: progress.progress }));
+            alert('✅ Level 1 voltooid!');
+          } else if (progress.progress.status === 'failed') {
+            clearInterval(pollInterval);
+            setAnalyzingLevel(null);
+            await updateLevelStatus(1, 'not_started');
+            alert('❌ Level 1 mislukt. Probeer het opnieuw.');
+          }
+        } catch (error) {
+          console.error('Error polling progress:', error);
+        }
+      }, 1000); // snellere polling voor voortgang
+      
+      // Timeout na 10 minuten
+      setTimeout(() => {
+        clearInterval(pollInterval);
+        if (analyzingLevel === 1) {
+          setAnalyzingLevel(null);
+          alert('⏱️ Analyse duurt langer dan verwacht. Check later opnieuw.');
+        }
+      }, 600000);
+      
+    } catch (error: any) {
+      console.error('Error starting Level 1:', error);
+      setAnalyzingLevel(null);
+      await updateLevelStatus(1, 'not_started');
+      alert(`❌ Fout bij starten Level 1: ${error.message || 'Onbekende fout'}`);
+    }
+  };
+
+  const startLevel2 = async () => {
+    setAnalyzingLevel(2);
+    await updateLevelStatus(2, 'in_progress');
+    
+    try {
+      const functionsUrl = 'https://europe-west4-richting-sales-d764a.cloudfunctions.net/analyseRisicoProfiel';
+      const response = await fetch(functionsUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          organisatieNaam: customer.name,
+          website: customer.website || '',
+          customerId: customer.id
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const data = await response.json();
+      setAnalyzingLevel(null);
+      await updateLevelStatus(2, 'completed', data);
+      alert('✅ Level 2 voltooid!');
+    } catch (error: any) {
+      console.error('Error starting Level 2:', error);
+      setAnalyzingLevel(null);
+      await updateLevelStatus(2, 'not_started');
+      alert(`❌ Fout bij starten Level 2: ${error.message || 'Onbekende fout'}`);
+    }
+  };
+
+  const startLevel3 = async () => {
+    setAnalyzingLevel(3);
+    await updateLevelStatus(3, 'in_progress');
+    
+    try {
+      const functionsUrl = 'https://europe-west4-richting-sales-d764a.cloudfunctions.net/analyseCultuurTest';
+      const response = await fetch(functionsUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          organisatieNaam: customer.name,
+          website: customer.website || '',
+          customerId: customer.id
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const data = await response.json();
+      setAnalyzingLevel(null);
+      await updateLevelStatus(3, 'completed', data);
+      alert('✅ Level 3 voltooid!');
+    } catch (error: any) {
+      console.error('Error starting Level 3:', error);
+      setAnalyzingLevel(null);
+      await updateLevelStatus(3, 'not_started');
+      alert(`❌ Fout bij starten Level 3: ${error.message || 'Onbekende fout'}`);
+    }
+  };
+
+  const getLevelStatusIcon = (status: string) => {
+    switch (status) {
+      case 'completed': return '✅';
+      case 'in_progress': return '⏳';
+      default: return '⭕';
+    }
+  };
+
+  const getLevelStatusColor = (status: string) => {
+    switch (status) {
+      case 'completed': return 'bg-green-100 text-green-700 border-green-300';
+      case 'in_progress': return 'bg-yellow-100 text-yellow-700 border-yellow-300';
+      default: return 'bg-gray-100 text-gray-700 border-gray-300';
+    }
+  };
+
+  const allLevelsCompleted = klantreis.levels.every(l => l.status === 'completed');
+
+  return (
+    <div className="space-y-6">
+      {/* Header */}
+      <div className="flex justify-between items-center">
+        <div>
+          <button onClick={onBack} className="text-richting-orange hover:underline mb-2 flex items-center gap-2">
+            ← Terug
+          </button>
+          <h1 className="text-3xl font-bold text-slate-900">Klantreis: {customer.name}</h1>
+          <p className="text-gray-600 mt-1">Verzamel informatie over de organisatie in 3 stappen</p>
+        </div>
+        {allLevelsCompleted && (
+          <button
+            onClick={onComplete}
+            className="bg-richting-orange text-white px-6 py-3 rounded-lg font-bold hover:bg-orange-600 transition-colors"
+          >
+            Naar Detail Overzicht →
+          </button>
+        )}
+      </div>
+
+      {/* Levels */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        {klantreis.levels.map((level) => (
+          <div
+            key={level.level}
+            className={`bg-white rounded-xl shadow-lg border-2 p-6 ${
+              level.status === 'completed' ? 'border-green-300' : 
+              level.status === 'in_progress' ? 'border-yellow-300' : 
+              'border-gray-200'
+            }`}
+          >
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center gap-3">
+                <div className={`w-12 h-12 rounded-full flex items-center justify-center text-2xl font-bold ${
+                  level.status === 'completed' ? 'bg-green-100 text-green-700' :
+                  level.status === 'in_progress' ? 'bg-yellow-100 text-yellow-700' :
+                  'bg-gray-100 text-gray-500'
+                }`}>
+                  {level.level}
+                </div>
+                <div>
+                  <h3 className="font-bold text-slate-900">{level.name}</h3>
+                  <span className={`text-xs px-2 py-1 rounded border ${getLevelStatusColor(level.status)}`}>
+                    {getLevelStatusIcon(level.status)} {level.status === 'completed' ? 'Voltooid' : level.status === 'in_progress' ? 'Bezig...' : 'Niet gestart'}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* Level 1 voortgang per hoofdstuk */}
+            {level.level === 1 && (level.status === 'in_progress' || Object.keys(hoofdstukkenResultaten).length > 0) && (
+              <div className="mb-4 space-y-3">
+                <div className="flex items-center justify-between text-xs text-gray-600">
+                  <span>Voortgang: {analyseStap} / 13</span>
+                  <div className="w-32 bg-gray-200 rounded-full h-2">
+                    <div 
+                      className="bg-richting-orange h-2 rounded-full transition-all duration-300"
+                      style={{ width: `${(analyseStap / 13) * 100}%` }}
+                    ></div>
+                  </div>
+                </div>
+                {Object.keys(hoofdstukkenResultaten).length > 0 && (
+                  <div className="border border-gray-200 rounded-lg p-3 bg-gray-50 max-h-48 overflow-y-auto">
+                    <p className="text-xs font-semibold text-slate-800 mb-2">Hoofdstukken gereed:</p>
+                    <div className="space-y-2">
+                      {Object.keys(hoofdstukkenResultaten).sort().map(key => (
+                        <div key={key} className="bg-white border border-green-200 rounded p-2">
+                          <div className="text-xs font-bold text-green-700">
+                            ✅ Hoofdstuk {key}: {hoofdstukTitels[key] || `Hoofdstuk ${key}`}
+                          </div>
+                          <div className="text-[11px] text-gray-600 line-clamp-2">
+                            {hoofdstukkenResultaten[key].substring(0, 160)}...
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {level.status === 'completed' && level.resultData && (
+              <div className="mb-4 p-3 bg-gray-50 rounded-lg">
+                <p className="text-xs text-gray-600 mb-2">Resultaten beschikbaar</p>
+                <button
+                  onClick={() => {
+                    // Show results in a modal or expand
+                    alert('Resultaten worden getoond (nog te implementeren)');
+                  }}
+                  className="text-xs text-richting-orange hover:underline"
+                >
+                  Bekijk resultaten →
+                </button>
+              </div>
+            )}
+
+            <button
+              onClick={() => {
+                if (level.level === 1) startLevel1();
+                else if (level.level === 2) startLevel2();
+                else if (level.level === 3) startLevel3();
+              }}
+              disabled={level.status === 'in_progress' || analyzingLevel !== null}
+              className={`w-full py-3 rounded-lg font-bold transition-colors ${
+                level.status === 'completed'
+                  ? 'bg-gray-100 text-gray-500 cursor-not-allowed'
+                  : level.status === 'in_progress' || analyzingLevel !== null
+                  ? 'bg-yellow-100 text-yellow-700 cursor-wait'
+                  : 'bg-richting-orange text-white hover:bg-orange-600'
+              }`}
+            >
+              {level.status === 'completed' ? 'Voltooid' : 
+               level.status === 'in_progress' || analyzingLevel === level.level ? 'Bezig...' : 
+               'Start Analyse'}
+            </button>
+
+            {level.completedAt && (
+              <p className="text-xs text-gray-500 mt-2 text-center">
+                Voltooid: {new Date(level.completedAt).toLocaleDateString('nl-NL')}
+              </p>
+            )}
+          </div>
+        ))}
+      </div>
+
+      {/* Progress Summary */}
+      <div className="bg-gradient-to-r from-richting-orange to-orange-600 rounded-xl p-6 text-white">
+        <h2 className="text-xl font-bold mb-4">Voortgang</h2>
+        <div className="flex items-center gap-4">
+          <div className="flex-1">
+            <div className="flex justify-between text-sm mb-2">
+              <span>Voltooide levels</span>
+              <span className="font-bold">
+                {klantreis.levels.filter(l => l.status === 'completed').length} / {klantreis.levels.length}
+              </span>
+            </div>
+            <div className="w-full bg-white/20 rounded-full h-3">
+              <div
+                className="bg-white h-3 rounded-full transition-all duration-500"
+                style={{
+                  width: `${(klantreis.levels.filter(l => l.status === 'completed').length / klantreis.levels.length) * 100}%`
+                }}
+              />
+            </div>
+          </div>
+        </div>
+        {allLevelsCompleted && (
+          <div className="mt-4 p-3 bg-white/20 rounded-lg">
+            <p className="font-bold">🎉 Alle levels voltooid!</p>
+            <p className="text-sm mt-1">Je kunt nu naar het detail overzicht om alle informatie te bekijken.</p>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
 const CustomerDetailView = ({ 
   customer, 
   user,
   onBack, 
   onUpdate, 
   onDelete,
-  onOpenDoc
+  onOpenDoc,
+  onShowKlantreis,
+  onRefresh
 }: { 
   customer: Customer, 
   user: User,
   onBack: () => void,
   onUpdate: (updated: Customer) => void,
   onDelete: (id: string) => void,
-  onOpenDoc: (doc: DocumentSource) => void
+  onOpenDoc: (doc: DocumentSource) => void,
+  onShowKlantreis?: () => void,
+  onRefresh?: () => void
 }) => {
   const [locations, setLocations] = useState<Location[]>([]);
   const [contacts, setContacts] = useState<ContactPerson[]>([]);
@@ -361,60 +775,136 @@ const CustomerDetailView = ({
   const [contactEmail, setContactEmail] = useState('');
   const [contactRole, setContactRole] = useState('');
 
+  const loadData = async () => {
+    try {
+      console.log(`🔄 Loading data for customer: ${customer.id}`);
+      const [locs, conts, documents, profiel] = await Promise.all([
+        customerService.getLocations(customer.id),
+        customerService.getContactPersons(customer.id),
+        dbService.getDocumentsForCustomer(customer.id),
+        customerService.getOrganisatieProfiel(customer.id)
+      ]);
+      console.log(`✅ Loaded ${locs.length} locations for customer ${customer.id}:`, locs);
+      setLocations(locs);
+      setContacts(conts);
+      setDocs(documents);
+      setOrganisatieProfiel(profiel);
+       
+      // Update locaties zonder coordinaten of richtingLocatieId
+      const locatiesTeUpdaten = locs.filter(loc => 
+        (!loc.latitude || !loc.longitude || !loc.richtingLocatieId) && loc.address && loc.city
+      );
+       
+      if (locatiesTeUpdaten.length > 0) {
+        // Update in achtergrond (niet blokkerend)
+        Promise.all(locatiesTeUpdaten.map(async (loc) => {
+          try {
+            // Geocodeer adres
+            const coordinates = await geocodeAddress(loc.address, loc.city);
+            if (!coordinates) return;
+             
+            // Vind dichtstbijzijnde Richting locatie
+            const nearest = await findNearestRichtingLocation(coordinates.latitude, coordinates.longitude);
+             
+            // Update locatie
+            const updatedLoc: Location = {
+              ...loc,
+              latitude: coordinates.latitude,
+              longitude: coordinates.longitude,
+              richtingLocatieId: nearest?.id || loc.richtingLocatieId,
+              richtingLocatieNaam: nearest?.naam || loc.richtingLocatieNaam
+            };
+             
+            await customerService.addLocation(updatedLoc);
+             
+            // Update state
+            setLocations(prev => prev.map(l => l.id === loc.id ? updatedLoc : l));
+          } catch (error) {
+            console.error(`Error updating location ${loc.id}:`, error);
+          }
+        })).catch(error => {
+          console.error('Error updating locations:', error);
+        });
+      }
+    } catch (error) {
+      console.error('Error loading customer data:', error);
+    }
+  };
+
   useEffect(() => {
-    const loadData = async () => {
-       const [locs, conts, documents, profiel] = await Promise.all([
-          customerService.getLocations(customer.id),
-          customerService.getContactPersons(customer.id),
-          dbService.getDocumentsForCustomer(customer.id),
-          customerService.getOrganisatieProfiel(customer.id)
-       ]);
-       setLocations(locs);
-       setContacts(conts);
-       setDocs(documents);
-       setOrganisatieProfiel(profiel);
-    };
     loadData();
-  }, [customer]);
+  }, [customer.id]);
 
   const handleAddLocation = async () => {
-    if (!locName || !locAddress) return;
-    
-    // Try to get coordinates from address (using a simple geocoding approach)
-    // For now, we'll add the location and try to find nearest Richting location based on city
-    // In the future, we can integrate a geocoding service to get exact coordinates
-    
-    const newLoc: Location = {
-      id: `loc_${Date.now()}`,
-      customerId: customer.id,
-      name: locName,
-      address: locAddress,
-      city: locCity,
-      employeeCount: locEmployeeCount
-    };
-    
-    // Try to find nearest Richting location based on city name
-    // This is a fallback - ideally we'd use coordinates
-    try {
-      const allRichtingLocaties = await richtingLocatiesService.getAllLocaties();
-      // Simple city name matching as fallback
-      const matchingLocatie = allRichtingLocaties.find(rl => 
-        rl.vestiging.toLowerCase().includes(locCity.toLowerCase()) ||
-        locCity.toLowerCase().includes(rl.vestiging.toLowerCase())
-      );
-      
-      if (matchingLocatie) {
-        newLoc.richtingLocatieId = matchingLocatie.id;
-        newLoc.richtingLocatieNaam = matchingLocatie.vestiging;
-      }
-    } catch (e) {
-      console.error("Error finding nearest Richting location:", e);
+    if (!locName || !locAddress || !locCity) {
+      alert('Vul naam, adres en stad in');
+      return;
     }
     
-    await customerService.addLocation(newLoc);
-    setLocations(prev => [...prev, newLoc]);
-    setIsAddingLoc(false);
-    setLocName(''); setLocAddress(''); setLocCity(''); setLocEmployeeCount(undefined);
+    // Toon loading state
+    setIsAddingLoc(false); // Sluit form tijdelijk
+    
+    try {
+      // Stap 1: Geocodeer het adres om GPS coordinaten te krijgen
+      const coordinates = await geocodeAddress(locAddress, locCity);
+      
+      const newLoc: Location = {
+        id: `loc_${Date.now()}`,
+        customerId: customer.id,
+        name: locName,
+        address: locAddress,
+        city: locCity,
+        employeeCount: locEmployeeCount,
+        latitude: coordinates?.latitude,
+        longitude: coordinates?.longitude
+      };
+      
+      // Stap 2: Vind dichtstbijzijnde Richting locatie op basis van GPS coordinaten
+      if (coordinates) {
+        const nearest = await findNearestRichtingLocation(coordinates.latitude, coordinates.longitude);
+        if (nearest) {
+          newLoc.richtingLocatieId = nearest.id;
+          newLoc.richtingLocatieNaam = nearest.naam;
+          console.log(`📍 Dichtstbijzijnde Richting locatie: ${nearest.naam} (${nearest.distance.toFixed(1)} km)`);
+        }
+      } else {
+        // Fallback: probeer op basis van stad naam te matchen
+        console.warn('Geocoding mislukt, probeer stad naam matching');
+        const allRichtingLocaties = await richtingLocatiesService.getAllLocaties();
+        const matchingLocatie = allRichtingLocaties.find(rl => {
+          const cityLower = locCity.toLowerCase();
+          const stadLower = rl.stad?.toLowerCase() || '';
+          const vestigingLower = rl.vestiging.toLowerCase();
+          return cityLower === stadLower || 
+                 vestigingLower.includes(cityLower) ||
+                 cityLower.includes(vestigingLower);
+        });
+        
+        if (matchingLocatie) {
+          newLoc.richtingLocatieId = matchingLocatie.id;
+          newLoc.richtingLocatieNaam = matchingLocatie.vestiging;
+        }
+      }
+      
+      // Stap 3: Sla locatie op
+      await customerService.addLocation(newLoc);
+      setLocations(prev => [...prev, newLoc]);
+      setIsAddingLoc(false);
+      setLocName(''); 
+      setLocAddress(''); 
+      setLocCity(''); 
+      setLocEmployeeCount(undefined);
+      
+      if (newLoc.richtingLocatieNaam) {
+        alert(`✅ Locatie toegevoegd!\n📍 Dichtstbijzijnde Richting: ${newLoc.richtingLocatieNaam}`);
+      } else {
+        alert('✅ Locatie toegevoegd!\n⚠️ Geen Richting locatie gevonden - controleer handmatig.');
+      }
+    } catch (error: any) {
+      console.error('Error adding location:', error);
+      alert(`❌ Fout bij toevoegen locatie: ${error.message || 'Onbekende fout'}`);
+      setIsAddingLoc(true); // Heropen form bij fout
+    }
   };
 
   const handleEditLocation = (location: Location) => {
@@ -497,6 +987,150 @@ const CustomerDetailView = ({
     return `https://www.google.com/maps/search/?api=1&query=${query}`;
   };
 
+  // Geocoding functie: haal latitude/longitude op van een adres
+  const geocodeAddress = async (address: string, city: string): Promise<{ latitude: number; longitude: number } | null> => {
+    try {
+      const fullAddress = `${address}, ${city}, Nederland`;
+      // Gebruik een gratis geocoding service (Nominatim OpenStreetMap)
+      const response = await fetch(
+        `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(fullAddress)}&limit=1`,
+        {
+          headers: {
+            'User-Agent': 'Richting-Kennisbank/1.0' // Vereist door Nominatim
+          }
+        }
+      );
+      
+      if (!response.ok) {
+        throw new Error('Geocoding service niet beschikbaar');
+      }
+      
+      const data = await response.json();
+      if (data && data.length > 0) {
+        return {
+          latitude: parseFloat(data[0].lat),
+          longitude: parseFloat(data[0].lon)
+        };
+      }
+      return null;
+    } catch (error) {
+      console.error('Geocoding error:', error);
+      return null;
+    }
+  };
+
+  // Haversine formule: bereken afstand tussen twee GPS coordinaten in kilometers
+  const calculateDistance = (lat1: number, lon1: number, lat2: number, lon2: number): number => {
+    const R = 6371; // Radius of the Earth in kilometers
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLon = (lon2 - lon1) * Math.PI / 180;
+    const a = 
+      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+      Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return R * c;
+  };
+
+  // Vind dichtstbijzijnde Richting locatie op basis van GPS coordinaten
+  const findNearestRichtingLocation = async (
+    latitude: number, 
+    longitude: number
+  ): Promise<{ id: string; naam: string; distance: number } | null> => {
+    try {
+      const allRichtingLocaties = await richtingLocatiesService.getAllLocaties();
+      
+      // Filter locaties met coordinaten
+      const locatiesMetCoordinaten = allRichtingLocaties.filter(
+        rl => rl.latitude !== undefined && rl.longitude !== undefined
+      );
+      
+      if (locatiesMetCoordinaten.length === 0) {
+        return null;
+      }
+      
+      // Bereken afstand naar alle locaties en vind de dichtstbijzijnde
+      let nearest: { id: string; naam: string; distance: number } | null = null;
+      let minDistance = Infinity;
+      
+      for (const rl of locatiesMetCoordinaten) {
+        if (rl.latitude && rl.longitude) {
+          const distance = calculateDistance(latitude, longitude, rl.latitude, rl.longitude);
+          if (distance < minDistance) {
+            minDistance = distance;
+            nearest = {
+              id: rl.id,
+              naam: rl.vestiging,
+              distance: distance
+            };
+          }
+        }
+      }
+      
+      return nearest;
+    } catch (error) {
+      console.error('Error finding nearest Richting location:', error);
+      return null;
+    }
+  };
+
+  // Automatisch een standaardlocatie aanmaken voor een klant op basis van bedrijfsnaam (fallback)
+  const autoCreateDefaultLocationForCustomer = async (cust: Customer) => {
+    try {
+      const query = `${cust.name}, Nederland`;
+      const response = await fetch(
+        `https://nominatim.openstreetmap.org/search?format=json&addressdetails=1&q=${encodeURIComponent(query)}&limit=1`,
+        {
+          headers: {
+            'User-Agent': 'Richting-Kennisbank/1.0'
+          }
+        }
+      );
+      if (!response.ok) return;
+      const data = await response.json();
+      if (!data || data.length === 0) return;
+
+      const result = data[0];
+      const addr = result.address || {};
+      const city =
+        addr.city ||
+        addr.town ||
+        addr.village ||
+        addr.state ||
+        '';
+      const addressLine = result.display_name || '';
+
+      const newLoc: Location = {
+        id: `loc_${Date.now()}`,
+        customerId: cust.id,
+        name: 'Hoofdkantoor',
+        address: addressLine,
+        city: city || 'Onbekend',
+        employeeCount: undefined,
+        latitude: parseFloat(result.lat),
+        longitude: parseFloat(result.lon)
+      };
+
+      // Vind dichtstbijzijnde Richting locatie
+      const nearest = await findNearestRichtingLocation(newLoc.latitude!, newLoc.longitude!);
+      if (nearest) {
+        newLoc.richtingLocatieId = nearest.id;
+        newLoc.richtingLocatieNaam = nearest.naam;
+      }
+
+      await customerService.addLocation(newLoc);
+      setLocations(prev => [...prev, newLoc]);
+
+      if (newLoc.richtingLocatieNaam) {
+        console.log(`✅ Automatische locatie toegevoegd: ${newLoc.address} (${newLoc.city}) → Richting: ${newLoc.richtingLocatieNaam}`);
+      } else {
+        console.log(`✅ Automatische locatie toegevoegd: ${newLoc.address} (${newLoc.city})`);
+      }
+    } catch (error) {
+      console.warn('Automatisch locatie ophalen mislukt:', error);
+    }
+  };
+
   const displayLogoUrl = customer.logoUrl || getCompanyLogoUrl(customer.website);
 
   const getDocIcon = (type: DocType) => {
@@ -511,9 +1145,21 @@ const CustomerDetailView = ({
 
   return (
     <div className="space-y-6">
-       <button onClick={onBack} className="text-gray-500 hover:text-richting-orange flex items-center gap-1 text-sm font-medium mb-4">
-         ← Terug naar overzicht
-       </button>
+       <div className="flex items-center justify-between mb-4">
+         <button onClick={onBack} className="text-gray-500 hover:text-richting-orange flex items-center gap-1 text-sm font-medium">
+           ← Terug naar overzicht
+         </button>
+         <button 
+           onClick={loadData}
+           className="text-gray-500 hover:text-richting-orange flex items-center gap-1 text-sm font-medium"
+           title="Ververs data (locaties, contactpersonen, etc.)"
+         >
+           <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+           </svg>
+           Ververs
+         </button>
+       </div>
 
        <div className="bg-white border-l-4 border-richting-orange rounded-r-xl shadow-sm p-6 mb-6">
           <div className="flex justify-between items-start">
@@ -613,7 +1259,12 @@ const CustomerDetailView = ({
             )}
 
             <div className="space-y-3">
-               {locations.length === 0 && !isAddingLoc && <p className="text-sm text-gray-400 italic">Nog geen locaties toegevoegd.</p>}
+               {locations.length === 0 && !isAddingLoc && (
+                 <div className="text-sm text-gray-400 italic">
+                   <p>Nog geen locaties toegevoegd.</p>
+                   <p className="text-xs mt-1 text-gray-300">Tip: Start de Klantreis om automatisch locaties te vinden.</p>
+                 </div>
+               )}
                {locations.map(loc => (
                  <div key={loc.id} className="bg-white p-4 rounded-lg border border-gray-100 shadow-sm group hover:border-richting-orange transition-colors">
                     <div className="flex justify-between items-start mb-2">
@@ -634,6 +1285,11 @@ const CustomerDetailView = ({
                             <div className="mt-2 flex items-center gap-1">
                               <span className="text-xs text-richting-orange font-medium">📍 Dichtstbijzijnde Richting:</span>
                               <span className="text-xs text-slate-700 font-semibold">{loc.richtingLocatieNaam}</span>
+                            </div>
+                          )}
+                          {loc.latitude && loc.longitude && (
+                            <div className="mt-1 flex items-center gap-1">
+                              <span className="text-xs text-gray-400">🌐 GPS: {loc.latitude.toFixed(4)}, {loc.longitude.toFixed(4)}</span>
                             </div>
                           )}
                        </div>
@@ -841,6 +1497,65 @@ const CustomerDetailView = ({
             </div>
          </div>
        </div>
+
+       {/* KLANTREIS SECTION - Always visible, prominent call-to-action */}
+       {onShowKlantreis && (
+         <div className="pt-8 border-t border-gray-200 mt-8">
+           <div className="bg-gradient-to-r from-richting-orange to-orange-600 rounded-xl p-6 text-white shadow-lg">
+             <div className="flex items-start justify-between">
+               <div className="flex-1">
+                 <h3 className="font-bold text-xl mb-2">🚀 Klantreis</h3>
+                 <p className="text-sm mb-4 opacity-90">
+                   Verzamel informatie over de organisatie in 3 stappen: Organisatie Profiel, Risico Profiel en Cultuur Profiel.
+                 </p>
+                 {customer.klantreis && (
+                   <div className="mb-4">
+                     <p className="text-xs mb-2 opacity-90">Voortgang:</p>
+                     <div className="flex gap-2 mb-2">
+                       {customer.klantreis.levels.map((level) => (
+                         <div
+                           key={level.level}
+                           className={`flex-1 h-2 rounded ${
+                             level.status === 'completed' ? 'bg-white' :
+                             level.status === 'in_progress' ? 'bg-yellow-200' :
+                             'bg-white/30'
+                           }`}
+                           title={`Level ${level.level}: ${level.status === 'completed' ? 'Voltooid' : level.status === 'in_progress' ? 'Bezig' : 'Niet gestart'}`}
+                         />
+                       ))}
+                     </div>
+                     <div className="flex gap-2 text-xs">
+                       {customer.klantreis.levels.map((level) => (
+                         <span
+                           key={level.level}
+                           className={`px-2 py-1 rounded ${
+                             level.status === 'completed' ? 'bg-white/20' :
+                             level.status === 'in_progress' ? 'bg-yellow-200/20' :
+                             'bg-white/10'
+                           }`}
+                         >
+                           {level.level}: {level.status === 'completed' ? '✓' : level.status === 'in_progress' ? '...' : '○'}
+                         </span>
+                       ))}
+                     </div>
+                     <p className="text-xs mt-2 opacity-75">
+                       {customer.klantreis.levels.filter(l => l.status === 'completed').length} / {customer.klantreis.levels.length} levels voltooid
+                     </p>
+                   </div>
+                 )}
+               </div>
+               <button
+                 onClick={onShowKlantreis}
+                 className="ml-4 bg-white text-richting-orange px-6 py-3 rounded-lg font-bold hover:bg-gray-100 transition-colors shadow-md flex-shrink-0"
+               >
+                 {customer.klantreis?.levels.some(l => l.status === 'in_progress' || l.status === 'completed') 
+                   ? 'Ga naar Klantreis →' 
+                   : 'Start Klantreis →'}
+               </button>
+             </div>
+           </div>
+         </div>
+       )}
 
        {/* ORGANISATIE ANALYSE SECTION */}
        <div className="pt-8 border-t border-gray-200">
@@ -2165,13 +2880,24 @@ const CustomersView = ({ user, onOpenDoc }: { user: User, onOpenDoc: (d: Documen
       status: 'prospect', // Start as prospect
       assignedUserIds: [user.id], // Only current user by default
       createdAt: new Date().toISOString(),
-      employeeCount: undefined,
-      hasRIE: undefined
+      klantreis: {
+        levels: [
+          { level: 1 as const, name: 'Publiek Organisatie Profiel', status: 'not_started' as const },
+          { level: 2 as const, name: 'Publiek Risico Profiel', status: 'not_started' as const },
+          { level: 3 as const, name: 'Publiek Cultuur Profiel', status: 'not_started' as const }
+        ],
+        lastUpdated: new Date().toISOString()
+      }
     };
 
     await customerService.addCustomer(newCustomer);
     setCustomers(prev => [...prev, newCustomer]);
     setShowAddModal(false);
+    
+    // Show customer detail view first (not Klantreis view)
+    // User can start Klantreis manually from the detail view
+    setSelectedCustomer(newCustomer);
+    setShowKlantreis(false); // Don't auto-show Klantreis, show detail view instead
     
     // Reset all form state
     setNewName('');
@@ -2181,11 +2907,6 @@ const CustomersView = ({ user, onOpenDoc }: { user: User, onOpenDoc: (d: Documen
     setHasSearched(false);
   };
 
-  const toggleUserAssignment = (userId: string) => {
-    setAssignedIds(prev => 
-      prev.includes(userId) ? prev.filter(id => id !== userId) : [...prev, userId]
-    );
-  };
 
   const toggleCustomerSelection = (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
@@ -2236,7 +2957,66 @@ const CustomersView = ({ user, onOpenDoc }: { user: User, onOpenDoc: (d: Documen
       setSelectedCustomer(null); // Go back to list
   };
 
-  if (selectedCustomer) {
+  // State for Klantreis view
+  const [showKlantreis, setShowKlantreis] = useState(false);
+  
+  // When customer is selected, check if we should show Klantreis view
+  useEffect(() => {
+    if (selectedCustomer) {
+      // If customer has no klantreis, initialize it but don't auto-show
+      // User can navigate to Klantreis view manually
+      if (!selectedCustomer.klantreis) {
+        // Initialize klantreis silently in background
+        const initialKlantreis = {
+          levels: [
+            { level: 1 as const, name: 'Publiek Organisatie Profiel', status: 'not_started' as const },
+            { level: 2 as const, name: 'Publiek Risico Profiel', status: 'not_started' as const },
+            { level: 3 as const, name: 'Publiek Cultuur Profiel', status: 'not_started' as const }
+          ],
+          lastUpdated: new Date().toISOString()
+        };
+        customerService.updateCustomer(selectedCustomer.id, { klantreis: initialKlantreis }).then(() => {
+          setSelectedCustomer({ ...selectedCustomer, klantreis: initialKlantreis });
+        });
+      }
+    }
+  }, [selectedCustomer]);
+
+  if (selectedCustomer && showKlantreis) {
+    return <KlantreisView 
+        customer={selectedCustomer} 
+        user={user}
+        onBack={async () => {
+          setShowKlantreis(false);
+          // Refresh customer data when returning from Klantreis
+          try {
+            const customers = await customerService.getCustomersForUser(user.id, user.role);
+            const updated = customers.find(c => c.id === selectedCustomer.id);
+            if (updated) {
+              setSelectedCustomer(updated);
+            }
+          } catch (error) {
+            console.error('Error refreshing customer data:', error);
+          }
+        }}
+        onUpdate={handleCustomerUpdate}
+        onComplete={async () => {
+          setShowKlantreis(false);
+          // Refresh customer data when Klantreis completes
+          try {
+            const customers = await customerService.getCustomersForUser(user.id, user.role);
+            const updated = customers.find(c => c.id === selectedCustomer.id);
+            if (updated) {
+              setSelectedCustomer(updated);
+            }
+          } catch (error) {
+            console.error('Error refreshing customer data:', error);
+          }
+        }}
+    />;
+  }
+
+  if (selectedCustomer && !showKlantreis) {
     return <CustomerDetailView 
         customer={selectedCustomer} 
         user={user}
@@ -2244,6 +3024,7 @@ const CustomersView = ({ user, onOpenDoc }: { user: User, onOpenDoc: (d: Documen
         onUpdate={handleCustomerUpdate}
         onDelete={handleCustomerDelete}
         onOpenDoc={onOpenDoc}
+        onShowKlantreis={() => setShowKlantreis(true)}
     />;
   }
 
@@ -2978,6 +3759,7 @@ const RegioView = ({ user }: { user: User }) => {
   const [selectedVestiging, setSelectedVestiging] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [isLinkingLocations, setIsLinkingLocations] = useState(false);
+  const [isCleaningUp, setIsCleaningUp] = useState(false);
 
   useEffect(() => {
     const loadData = async () => {
@@ -3237,13 +4019,37 @@ const RegioView = ({ user }: { user: User }) => {
       <div className="flex justify-between items-center">
         <h2 className="text-2xl font-bold text-slate-900">Regio & Sales Overzicht</h2>
         {user.role === UserRole.ADMIN && (
-          <button
-            onClick={handleRelinkAllLocations}
-            disabled={isLinkingLocations}
-            className="bg-blue-500 text-white px-4 py-2 rounded-lg font-bold hover:bg-blue-600 disabled:opacity-50 transition-colors text-sm"
-          >
-            {isLinkingLocations ? '⏳ Koppelen...' : '🔗 Koppel Alle Locaties'}
-          </button>
+          <div className="flex gap-2">
+            <button
+              onClick={async () => {
+                if (!window.confirm('Weet je zeker dat je alle locaties zonder klantkoppeling wilt verwijderen? Deze actie kan niet ongedaan worden gemaakt.')) {
+                  return;
+                }
+                setIsCleaningUp(true);
+                try {
+                  const result = await customerService.cleanupOrphanedLocations();
+                  alert(`✅ Cleanup voltooid!\n\nVerwijderd: ${result.deleted} locatie(s)\n${result.errors.length > 0 ? `Fouten: ${result.errors.length}` : 'Geen fouten'}`);
+                  // Reload data
+                  window.location.reload();
+                } catch (error: any) {
+                  alert(`❌ Fout bij cleanup: ${error.message}`);
+                } finally {
+                  setIsCleaningUp(false);
+                }
+              }}
+              disabled={isCleaningUp}
+              className="bg-red-500 text-white px-4 py-2 rounded-lg font-bold hover:bg-red-600 disabled:opacity-50 transition-colors text-sm"
+            >
+              {isCleaningUp ? '⏳ Opruimen...' : '🧹 Verwijder Orphaned Locaties'}
+            </button>
+            <button
+              onClick={handleRelinkAllLocations}
+              disabled={isLinkingLocations}
+              className="bg-blue-500 text-white px-4 py-2 rounded-lg font-bold hover:bg-blue-600 disabled:opacity-50 transition-colors text-sm"
+            >
+              {isLinkingLocations ? '⏳ Koppelen...' : '🔗 Koppel Alle Locaties'}
+            </button>
+          </div>
         )}
       </div>
 
@@ -3606,13 +4412,11 @@ const SettingsView = ({ user }: { user: User }) => {
         setRichtingLocaties(locatiesData);
         setLogoUrl(logoUrlData);
         
-        // Log prompts for debugging
-        console.log('📋 Loaded prompts:', promptsData.length);
+        // Alleen loggen als er geen prompts zijn (voor debugging)
         if (promptsData.length === 0) {
           console.warn('⚠️ No prompts found. Check Firestore collection "prompts" in database "richting01"');
-        } else {
-          console.log('📋 Prompts:', promptsData.map(p => `${p.name || p.type} (${p.type}, v${p.versie || 1}, ${p.isActief ? 'actief' : 'inactief'})`).join(', '));
         }
+        // Verwijder normale logging - te veel noise in console tijdens analyse
         
         // Use types with labels directly from service
         setPromptTypes(typesWithLabelsData);
@@ -4299,6 +5103,21 @@ const SettingsView = ({ user }: { user: User }) => {
               <button
                 onClick={async () => {
                   try {
+                    const result = await promptService.restoreDefaultPrompts(user.id);
+                    alert(`✅ ${result.message}`);
+                    const updatedPrompts = await promptService.getPrompts();
+                    setPrompts(updatedPrompts);
+                  } catch (error: any) {
+                    alert(`❌ Fout: ${error.message || 'Onbekende fout'}`);
+                  }
+                }}
+                className="bg-green-600 text-white px-4 py-2 rounded-lg font-bold hover:bg-green-700 transition-colors text-sm"
+              >
+                🔄 Herstel Default Prompts
+              </button>
+              <button
+                onClick={async () => {
+                  try {
                     const exportData = await promptService.exportPrompts();
                     const blob = new Blob([exportData], { type: 'application/json' });
                     const url = URL.createObjectURL(blob);
@@ -4788,6 +5607,23 @@ const SettingsView = ({ user }: { user: User }) => {
       {/* Data Beheer Tab */}
       {activeTab === 'databeheer' && (
         <div className="space-y-6">
+          {/* Backup Section */}
+          <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+            <h3 className="text-lg font-bold text-slate-900 mb-4">💾 Volledige Backup</h3>
+            <p className="text-sm text-gray-600 mb-4">
+              Maak een volledige backup van alle data (gebruikers, documenten, klanten, locaties, contactpersonen).
+            </p>
+            <button
+              onClick={handleBackup}
+              className="bg-richting-orange text-white px-6 py-3 rounded-lg font-bold hover:bg-orange-600 transition-colors flex items-center gap-2"
+            >
+              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+              </svg>
+              Download Volledige Backup
+            </button>
+          </div>
+
           {/* Data Management Tabs */}
           <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
             <div className="flex gap-2 mb-6 border-b border-gray-200">
