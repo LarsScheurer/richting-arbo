@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { User, DocumentSource, KNOWLEDGE_STRUCTURE, DocType, GeminiAnalysisResult, ChatMessage, Customer, Location, UserRole, ContactPerson, OrganisatieProfiel, Risico, Proces, Functie } from './types';
-import { authService, dbService, customerService, promptService, richtingLocatiesService, Prompt, RichtingLocatie, processService, functionService, substanceService } from './services/firebase';
+import { authService, dbService, customerService, promptService, richtingLocatiesService, Prompt, RichtingLocatie, processService, functionService, substanceService, logoService } from './services/firebase';
 import { addRiskAssessment, getRisksByCustomer, getRisksByProcess, getRisksByFunction, getRisksBySubstance } from './services/riskService';
 import { Process, Function as FunctionType, Substance, RiskAssessment } from './types/firestore';
 import { doc, updateDoc } from 'firebase/firestore';
@@ -3564,7 +3564,11 @@ const SettingsView = ({ user }: { user: User }) => {
   const [savingLocatie, setSavingLocatie] = useState(false);
   
   // Data management sub tabs
-  const [dataManagementSubTab, setDataManagementSubTab] = useState<'klanten' | 'locaties' | 'documents'>('klanten');
+  const [dataManagementSubTab, setDataManagementSubTab] = useState<'klanten' | 'locaties' | 'documents' | 'logo'>('klanten');
+  
+  // Logo upload state
+  const [uploadingLogo, setUploadingLogo] = useState(false);
+  const [logoUrl, setLogoUrl] = useState<string | null>(null);
   
   // Import customers state
   const [showImportCustomersModal, setShowImportCustomersModal] = useState(false);
@@ -3590,15 +3594,17 @@ const SettingsView = ({ user }: { user: User }) => {
     const loadData = async () => {
       setLoading(true);
       try {
-        const [usersData, promptsData, locatiesData, typesWithLabelsData] = await Promise.all([
+        const [usersData, promptsData, locatiesData, typesWithLabelsData, logoUrlData] = await Promise.all([
           authService.getAllUsers(),
           promptService.getPrompts(),
           richtingLocatiesService.getAllLocaties(),
-          promptService.getPromptTypesWithLabels()
+          promptService.getPromptTypesWithLabels(),
+          logoService.getLogoUrl()
         ]);
         setUsers(usersData);
         setPrompts(promptsData);
         setRichtingLocaties(locatiesData);
+        setLogoUrl(logoUrlData);
         
         // Log prompts for debugging
         console.log('📋 Loaded prompts:', promptsData.length);
@@ -3620,6 +3626,31 @@ const SettingsView = ({ user }: { user: User }) => {
     };
     loadData();
   }, []);
+  
+  const handleLogoUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    
+    // Validate file type
+    if (!file.type.startsWith('image/')) {
+      alert('Alleen afbeeldingsbestanden zijn toegestaan (PNG, JPG, etc.)');
+      return;
+    }
+    
+    setUploadingLogo(true);
+    try {
+      const url = await logoService.uploadLogo(file);
+      setLogoUrl(url);
+      alert('✅ Logo succesvol geüpload! Ververs de pagina om het nieuwe logo te zien.');
+      // Reset file input
+      event.target.value = '';
+    } catch (error: any) {
+      console.error('Error uploading logo:', error);
+      alert(`❌ Fout bij uploaden logo: ${error.message || 'Onbekende fout'}`);
+    } finally {
+      setUploadingLogo(false);
+    }
+  };
 
 
   const handleRoleChange = async (userId: string, newRole: UserRole) => {
@@ -4790,6 +4821,16 @@ const SettingsView = ({ user }: { user: User }) => {
               >
                 📄 Documents
               </button>
+              <button
+                onClick={() => setDataManagementSubTab('logo')}
+                className={`px-4 py-2 text-sm font-medium transition-colors border-b-2 ${
+                  dataManagementSubTab === 'logo'
+                    ? 'text-richting-orange border-richting-orange'
+                    : 'text-gray-500 border-transparent hover:text-gray-700'
+                }`}
+              >
+                🎨 Logo
+              </button>
             </div>
 
             {/* Klanten Section */}
@@ -4933,6 +4974,63 @@ const SettingsView = ({ user }: { user: User }) => {
                 </div>
                 <div className="text-center py-10 text-gray-500">
                   <p>Document beheer functionaliteit komt binnenkort.</p>
+                </div>
+              </div>
+            )}
+
+            {/* Logo Section */}
+            {dataManagementSubTab === 'logo' && (
+              <div className="space-y-4">
+                <div className="flex justify-between items-center">
+                  <h3 className="text-lg font-bold text-slate-900">Logo Beheer</h3>
+                </div>
+                
+                <div className="bg-white rounded-lg border-2 border-dashed border-gray-300 p-8 text-center">
+                  <div className="space-y-4">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">
+                        Upload Nieuw Logo
+                      </label>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        onChange={handleLogoUpload}
+                        disabled={uploadingLogo}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-richting-orange focus:border-richting-orange disabled:opacity-50"
+                      />
+                      <p className="text-xs text-gray-500 mt-2">
+                        Ondersteunde formaten: PNG, JPG, SVG (max. 5MB)
+                      </p>
+                    </div>
+                    
+                    {uploadingLogo && (
+                      <div className="text-richting-orange font-medium">
+                        ⏳ Logo wordt geüpload...
+                      </div>
+                    )}
+                    
+                    {logoUrl && (
+                      <div className="mt-6">
+                        <p className="text-sm font-medium text-gray-700 mb-3">Huidig Logo:</p>
+                        <div className="flex justify-center">
+                          <img 
+                            src={logoUrl} 
+                            alt="Richting Logo" 
+                            className="max-h-32 max-w-full object-contain border border-gray-200 rounded-lg p-4 bg-white"
+                          />
+                        </div>
+                        <p className="text-xs text-gray-500 mt-3">
+                          💡 Ververs de pagina om het nieuwe logo in de sidebar te zien.
+                        </p>
+                      </div>
+                    )}
+                    
+                    {!logoUrl && !uploadingLogo && (
+                      <div className="text-gray-500 text-sm">
+                        <p>Nog geen logo geüpload. Het standaard logo wordt gebruikt.</p>
+                      </div>
+                    )}
+                  </div>
                 </div>
               </div>
             )}

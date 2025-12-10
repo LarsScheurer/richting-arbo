@@ -26,6 +26,7 @@ import {
   where,
   addDoc
 } from 'firebase/firestore';
+import { getStorage, ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { DocumentSource, User, UserRole, DocType, Customer, BackupData, Location, ContactPerson, OrganisatieProfiel } from '../types';
 
 // --- STAP 1: CONFIGURATIE ---
@@ -43,6 +44,7 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 export const db = getFirestore(app, 'richting01'); // HARDE KOPPELING
+export const storage = getStorage(app);
 
 console.log("Firebase geinitialiseerd. Project:", firebaseConfig.projectId, "Database: richting01");
 
@@ -1537,6 +1539,46 @@ export interface RichtingLocatie {
   latitude?: number;
   longitude?: number;
 }
+
+// Logo Service
+export const logoService = {
+  // Upload logo to Firebase Storage and save URL to Firestore
+  uploadLogo: async (file: File): Promise<string> => {
+    try {
+      // Upload to Firebase Storage
+      const storageRef = ref(storage, 'logo/richting-logo.png');
+      await uploadBytes(storageRef, file);
+      const downloadURL = await getDownloadURL(storageRef);
+      
+      // Save URL to Firestore
+      const logoDocRef = doc(db, 'settings', 'logo');
+      await setDoc(logoDocRef, {
+        url: downloadURL,
+        updatedAt: new Date().toISOString()
+      }, { merge: true });
+      
+      return downloadURL;
+    } catch (error: any) {
+      console.error('Error uploading logo:', error);
+      throw new Error(`Fout bij uploaden logo: ${error.message || 'Onbekende fout'}`);
+    }
+  },
+  
+  // Get logo URL from Firestore
+  getLogoUrl: async (): Promise<string | null> => {
+    try {
+      const logoDocRef = doc(db, 'settings', 'logo');
+      const logoDoc = await getDoc(logoDocRef);
+      if (logoDoc.exists()) {
+        return logoDoc.data().url || null;
+      }
+      return null;
+    } catch (error: any) {
+      console.error('Error getting logo URL:', error);
+      return null;
+    }
+  }
+};
 
 // Re-export services for convenience
 export { processService } from './processService';
