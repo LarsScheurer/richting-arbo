@@ -44,7 +44,7 @@ export const analyzeContent = async (text: string): Promise<GeminiAnalysisResult
       }
     `;
 
-    const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
     const result = await model.generateContent(prompt);
     const response = await result.response;
     const textResponse = response.text();
@@ -108,7 +108,7 @@ export const askQuestion = async (question: string, contextDocs: DocumentSource[
       ${question}
     `;
 
-    const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
     const result = await model.generateContent(prompt);
     const response = await result.response;
 

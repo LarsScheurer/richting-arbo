@@ -102,7 +102,7 @@ exports.analyzeDocument = (0, https_1.onRequest)({ cors: true }, async (req, res
         return;
     }
     try {
-        const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
         const prompt = `
         Je bent een content analist voor Richting.nl. Analyseer de volgende tekst.
         
@@ -239,7 +239,7 @@ exports.analyzeDriveFile = (0, https_1.onRequest)({ cors: true }, async (req, re
             return;
         }
         // Analyze with Gemini
-        const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
         const prompt = `
         Je bent een content analist voor Richting.nl. Analyseer de volgende tekst.
         
@@ -285,7 +285,7 @@ exports.askQuestion = (0, https_1.onRequest)({ cors: true }, async (req, res) =>
     }
     const { question, context } = req.body;
     try {
-        const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
         const prompt = `
           Je bent de AI Kennisbank assistent van Richting.nl.
           Beantwoord de vraag op basis van de bronnen.
@@ -468,7 +468,7 @@ async function getRichtingLocations() {
         if (!genAI) {
             throw new Error("Gemini API not available");
         }
-        const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
         const prompt = `
 Je krijgt de HTML van de Richting locaties pagina (www.richting.nl/locaties). 
 
@@ -739,7 +739,7 @@ exports.analyseBranche = (0, https_1.onRequest)({
             console.error("Error fetching prompt from Firestore:", promptError);
             console.log("Using default prompt");
         }
-        const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
         const prompt = `${promptTekst}
 
 ORGANISATIE NAAM: ${organisatieNaam}
@@ -1021,7 +1021,7 @@ exports.analyseCultuurTest = (0, https_1.onRequest)({
             console.error("Error fetching prompt from Firestore:", promptError);
             console.log("Using default prompt");
         }
-        const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
         const prompt = `${promptTekst}
 
 ORGANISATIE NAAM: ${organisatieNaam}
@@ -1467,7 +1467,7 @@ exports.searchCompanyWebsite = (0, https_1.onRequest)({ cors: true }, async (req
         return;
     }
     try {
-        const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
         const prompt = `Je bent een assistent die helpt bij het vinden van de officiële website van een bedrijf.
 
 BEDRIJFSNAAM: ${companyName}
@@ -2228,7 +2228,7 @@ exports.analyseBrancheStapsgewijs = (0, https_1.onRequest)({
 async function processAnalyseStapsgewijs(organisatieNaam, website, analyseId, customerId) {
     const db = getFirestoreDb();
     const progressRef = db.collection('analyseProgress').doc(analyseId);
-    const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
     // Get active prompt from Firestore
     let basePrompt = DEFAULT_BRANCHE_ANALYSE_PROMPT;
     try {
@@ -2621,7 +2621,7 @@ exports.analyseRisicoProfiel = (0, https_1.onRequest)({
     }
     try {
         const db = getFirestoreDb();
-        const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
         // Get active prompt from Firestore
         let promptTekst = '';
         try {
