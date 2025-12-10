@@ -71,9 +71,22 @@ export const Layout: React.FC<LayoutProps> = ({ children, user, onLogout, curren
   ];
 
   // Add settings menu item for admins
-  const adminNavItems = user.role === UserRole.ADMIN 
+  // Check both enum value and string value (case-insensitive) for compatibility
+  const isAdmin = user.role === UserRole.ADMIN || 
+                  user.role === 'ADMIN' || 
+                  (typeof user.role === 'string' && user.role.toUpperCase() === 'ADMIN');
+  const adminNavItems = isAdmin 
     ? [{ id: 'settings', label: 'Instellingen', icon: '⚙️' }]
     : [];
+  
+  // Debug logging
+  console.log('🔍 Layout Debug:', { 
+    userRole: user.role, 
+    userRoleType: typeof user.role,
+    UserRoleADMIN: UserRole.ADMIN,
+    isAdmin, 
+    adminNavItemsLength: adminNavItems.length 
+  });
 
   const handleRoleSwitch = async (role: UserRole) => {
       await authService.updateUserRole(user.id, role);
