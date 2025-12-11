@@ -2973,4 +2973,93 @@ Voer nu de risico analyse uit en geef het resultaat in het gevraagde JSON formaa
         res.status(500).json({ error: error.message });
     }
 });
+// Nieuwe Cloud Function: Haal locaties op voor een klant op basis van website
+exports.fetchLocationsForCustomer = (0, https_1.onRequest)({ cors: true }, async (req, res) => {
+    res.set('Access-Control-Allow-Origin', '*');
+    res.set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.set('Access-Control-Allow-Headers', 'Content-Type');
+    if (req.method === 'OPTIONS') {
+        res.status(204).send('');
+        return;
+    }
+    if (!genAI) {
+        res.status(500).json({ error: "Server misconfiguration: API Key missing." });
+        return;
+    }
+    const { customerId, customerName, website } = req.body;
+    if (!customerName || !website) {
+        res.status(400).json({ error: "customerName en website zijn verplicht" });
+        return;
+    }
+    try {
+        const db = getFirestoreDb();
+        const model = genAI.getGenerativeModel({ model: "gemini-flash-latest", tools: [{ googleSearch: {} }] });
+        const prompt = `Je bent Gemini, geconfigureerd als een deskundige adviseur voor Richting, een toonaangevende, gecertificeerde arbodienst in Nederland.
+
+PRIMAIRE DOELSTELLING:
+Identificeer alle vestigingslocaties van de organisatie, het aantal medewerkers per locatie.
+
+ORGANISATIENAAM: ${customerName}
+WEBSITE: ${website}
+
+OPDRACHT:
+- Zoek alle vestigingslocaties van de organisatie in Nederland
+- Voor elke locatie verzamel:
+  * Naam van de locatie (bijv. "Hoofdkantoor", "Vestiging Amsterdam", "Productielocatie Rotterdam")
+  * Volledig adres (straat, huisnummer, postcode, stad)
+  * Stad
+  * Aantal medewerkers op die locatie (verplicht - gebruik 0 als onbekend)
+
+BELANGRIJK: 
+- Geef het antwoord ALLEEN in puur, geldig JSON formaat. Geen markdown, geen code blocks, geen extra tekst.
+- Zorg dat alle string waarden correct ge-escaped zijn (newlines als \\n, quotes als \\").
+- De JSON moet direct parseerbaar zijn zonder enige bewerking.
+
+JSON STRUCTUUR:
+{
+  "locaties": [
+    {
+      "naam": "Naam van de locatie (bijv. Hoofdkantoor, Vestiging Amsterdam)",
+      "adres": "Volledig adres inclusief straat en huisnummer",
+      "stad": "Stad",
+      "aantalMedewerkers": 0
+    }
+  ]
+}`;
+        const result = await model.generateContent(prompt);
+        const response = await result.response;
+        let jsonStr = response.text();
+        // Clean up markdown formatting
+        jsonStr = jsonStr.replace(/```json/g, '').replace(/```/g, '').trim();
+        // Try to extract JSON if it's wrapped in other text
+        const jsonMatch = jsonStr.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+            jsonStr = jsonMatch[0];
+        }
+        let json;
+        try {
+            json = JSON.parse(jsonStr);
+        }
+        catch (parseError) {
+            console.error("JSON Parse Error:", parseError.message);
+            res.status(500).json({ error: "Kon JSON niet parsen", details: parseError.message });
+            return;
+        }
+        // Validate and return results
+        const locaties = (json.locaties || []).map((loc) => ({
+            naam: loc.naam || 'Onbekende locatie',
+            adres: loc.adres || '',
+            stad: loc.stad || '',
+            aantalMedewerkers: typeof loc.aantalMedewerkers === 'number' ? loc.aantalMedewerkers : parseInt(loc.aantalMedewerkers || '0', 10)
+        })).filter((loc) => loc.adres && loc.stad);
+        res.json({ locaties, customerId: customerId || null });
+    }
+    catch (error) {
+        console.error("Location Fetch Error:", error);
+        res.status(500).json({
+            error: error.message || "Unknown error occurred",
+            locaties: []
+        });
+    }
+});
 //# sourceMappingURL=index.js.map

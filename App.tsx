@@ -707,6 +707,7 @@ const CustomerDetailView = ({
   const [editingLocation, setEditingLocation] = useState<Location | null>(null);
   const [deletingLocation, setDeletingLocation] = useState<Location | null>(null);
   const [isAnalyzingOrganisatie, setIsAnalyzingOrganisatie] = useState(false);
+  const [isFetchingLocations, setIsFetchingLocations] = useState(false);
   const [isAnalyzingCultuur, setIsAnalyzingCultuur] = useState(false);
   const [organisatieAnalyseResultaat, setOrganisatieAnalyseResultaat] = useState<string | null>(null);
   const [cultuurAnalyseResultaat, setCultuurAnalyseResultaat] = useState<string | null>(null);
@@ -897,6 +898,9 @@ const CustomerDetailView = ({
       setLocCity(''); 
       setLocEmployeeCount(undefined);
       
+      // Update customer.employeeCount
+      await updateCustomerEmployeeCount();
+      
       if (newLoc.richtingLocatieNaam) {
         const afstandText = newLoc.richtingLocatieAfstand !== undefined ? ` (${newLoc.richtingLocatieAfstand.toFixed(1)} km)` : '';
         alert(`✅ Locatie toegevoegd!\n📍 Richtingvestiging: ${newLoc.richtingLocatieNaam}${afstandText}`);
@@ -927,6 +931,9 @@ const CustomerDetailView = ({
     setLocations(prev => prev.map(loc => loc.id === editingLocation.id ? updatedLoc : loc));
     setEditingLocation(null);
     setEditLocEmployeeCount(undefined);
+    
+    // Update customer.employeeCount
+    await updateCustomerEmployeeCount();
   };
 
   const handleDeleteLocation = async () => {
@@ -936,9 +943,163 @@ const CustomerDetailView = ({
       await customerService.deleteLocation(deletingLocation.id);
       setLocations(prev => prev.filter(loc => loc.id !== deletingLocation.id));
       setDeletingLocation(null);
+      // Update customer.employeeCount na verwijderen
+      await updateCustomerEmployeeCount();
     } catch (error) {
       console.error("Error deleting location:", error);
       alert("Kon locatie niet verwijderen. Probeer het opnieuw.");
+    }
+  };
+
+  // Functie om customer.employeeCount bij te werken op basis van som van locatie-aantallen
+  const updateCustomerEmployeeCount = async () => {
+    try {
+      const totalEmployees = locations.reduce((sum, loc) => sum + (loc.employeeCount || 0), 0);
+      if (totalEmployees > 0) {
+        await customerService.updateCustomer(customer.id, { employeeCount: totalEmployees });
+        onUpdate({ ...customer, employeeCount: totalEmployees });
+        console.log(`✅ Customer employeeCount bijgewerkt naar ${totalEmployees}`);
+      }
+    } catch (error) {
+      console.error('Error updating customer employeeCount:', error);
+    }
+  };
+
+  // Functie om locaties op te halen via Cloud Function
+  const handleFetchLocations = async () => {
+    if (!customer.website) {
+      alert('Geen website bekend voor deze klant. Voeg eerst een website toe.');
+      return;
+    }
+
+    setIsFetchingLocations(true);
+    try {
+      const functionsUrl = 'https://europe-west4-richting-sales-d764a.cloudfunctions.net/fetchLocationsForCustomer';
+      const response = await fetch(functionsUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          customerId: customer.id,
+          customerName: customer.name,
+          website: customer.website
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const data = await response.json();
+      const fetchedLocaties = data.locaties || [];
+
+      if (fetchedLocaties.length === 0) {
+        alert('Geen locaties gevonden voor deze klant.');
+        setIsFetchingLocations(false);
+        return;
+      }
+
+      // Refresh locaties eerst om zeker te zijn dat we de meest recente data hebben
+      const currentLocations = await customerService.getLocations(customer.id);
+      console.log(`🔍 Checking ${currentLocations.length} existing locations against ${fetchedLocaties.length} fetched locations`);
+
+      // Verwerk elke gevonden locatie
+      let savedCount = 0;
+      let updatedCount = 0;
+      const newLocations: Location[] = [];
+
+      for (const locData of fetchedLocaties) {
+        try {
+          // Normaliseer adres en stad voor vergelijking (verwijder extra spaties, lowercase)
+          const normalizeString = (str: string) => str.toLowerCase().trim().replace(/\s+/g, ' ');
+          const normalizedAdres = normalizeString(locData.adres);
+          const normalizedStad = normalizeString(locData.stad);
+          const normalizedNaam = normalizeString(locData.naam || '');
+
+          // Check of locatie al bestaat (op basis van adres + stad, of naam + stad)
+          // We checken op meerdere criteria omdat adressen kunnen variëren
+          const existingLoc = currentLocations.find(l => {
+            const lAdres = normalizeString(l.address);
+            const lStad = normalizeString(l.city);
+            const lNaam = normalizeString(l.name);
+            
+            // Match op adres + stad (meest betrouwbaar)
+            if (lAdres === normalizedAdres && lStad === normalizedStad) {
+              return true;
+            }
+            
+            // Match op naam + stad (als adres niet exact matcht, maar naam wel)
+            if (normalizedNaam && lNaam && lNaam === normalizedNaam && lStad === normalizedStad) {
+              return true;
+            }
+            
+            return false;
+          });
+
+          // Geocodeer adres
+          const coordinates = await geocodeAddress(locData.adres, locData.stad);
+          
+          // Vind dichtstbijzijnde Richting locatie
+          let richtingLocatie = null;
+          if (coordinates) {
+            richtingLocatie = await findNearestRichtingLocation(coordinates.latitude, coordinates.longitude);
+          }
+
+          const locationToSave: Location = {
+            id: existingLoc ? existingLoc.id : `loc_${Date.now()}_${savedCount}`,
+            customerId: customer.id,
+            name: locData.naam || 'Onbekende locatie',
+            address: locData.adres,
+            city: locData.stad,
+            employeeCount: locData.aantalMedewerkers || 0,
+            latitude: coordinates?.latitude,
+            longitude: coordinates?.longitude,
+            richtingLocatieId: richtingLocatie?.id,
+            richtingLocatieNaam: richtingLocatie?.naam,
+            richtingLocatieAfstand: richtingLocatie?.distance
+          };
+
+          // Sla locatie op (overschrijf als al bestaat)
+          await customerService.addLocation(locationToSave);
+          newLocations.push(locationToSave);
+
+          if (existingLoc) {
+            updatedCount++;
+            console.log(`🔄 Locatie bijgewerkt: ${locData.naam} (${locData.adres}, ${locData.stad}) - Bestaande ID: ${existingLoc.id}`);
+          } else {
+            savedCount++;
+            console.log(`✅ Nieuwe locatie toegevoegd: ${locData.naam} (${locData.adres}, ${locData.stad})`);
+          }
+        } catch (error: any) {
+          console.error(`Error processing location ${locData.naam}:`, error);
+          // Ga door met volgende locatie
+        }
+      }
+
+      // Update locations state
+      setLocations(prev => {
+        const updated = [...prev];
+        newLocations.forEach(newLoc => {
+          const index = updated.findIndex(l => l.id === newLoc.id);
+          if (index >= 0) {
+            updated[index] = newLoc; // Overschrijf
+          } else {
+            updated.push(newLoc); // Voeg toe
+          }
+        });
+        return updated;
+      });
+
+      // Update customer.employeeCount
+      await updateCustomerEmployeeCount();
+
+      alert(`✅ ${savedCount} nieuwe locatie(s) toegevoegd, ${updatedCount} locatie(s) bijgewerkt.`);
+    } catch (error: any) {
+      console.error('Error fetching locations:', error);
+      alert(`❌ Fout bij ophalen locaties: ${error.message || 'Onbekende fout'}`);
+    } finally {
+      setIsFetchingLocations(false);
     }
   };
 
@@ -1341,7 +1502,22 @@ const CustomerDetailView = ({
          <div className="space-y-4">
             <div className="flex justify-between items-center border-b border-gray-200 pb-2">
                <h3 className="font-bold text-slate-900 flex items-center gap-2"><MapIcon/> Locaties</h3>
-               <button onClick={() => setIsAddingLoc(true)} className="text-xs bg-gray-100 hover:bg-gray-200 px-2 py-1 rounded text-slate-700 font-medium">+ Toevoegen</button>
+               <div className="flex gap-2">
+                 {customer.website && (
+                   <button 
+                     onClick={handleFetchLocations} 
+                     disabled={isFetchingLocations}
+                     className={`text-xs px-2 py-1 rounded font-medium ${
+                       isFetchingLocations 
+                         ? 'bg-gray-100 text-gray-400 cursor-not-allowed' 
+                         : 'bg-richting-orange text-white hover:bg-orange-600'
+                     }`}
+                   >
+                     {isFetchingLocations ? '⏳ Ophalen...' : '🔍 Locaties ophalen'}
+                   </button>
+                 )}
+                 <button onClick={() => setIsAddingLoc(true)} className="text-xs bg-gray-100 hover:bg-gray-200 px-2 py-1 rounded text-slate-700 font-medium">+ Toevoegen</button>
+               </div>
             </div>
 
             {isAddingLoc && (
@@ -4566,6 +4742,10 @@ const SettingsView = ({ user }: { user: User }) => {
   const [importCustomersPreview, setImportCustomersPreview] = useState<Partial<Customer>[] | null>(null);
   const [importingCustomers, setImportingCustomers] = useState(false);
   
+  // Bulk location import state
+  const [bulkImportingLocations, setBulkImportingLocations] = useState(false);
+  const [bulkImportProgress, setBulkImportProgress] = useState<{current: number, total: number} | null>(null);
+  
   // User management state
   const [showAddUserModal, setShowAddUserModal] = useState(false);
   const [newUserName, setNewUserName] = useState('');
@@ -4820,6 +5000,184 @@ const SettingsView = ({ user }: { user: User }) => {
     } catch (error: any) {
       console.error("Error exporting customers:", error);
       alert(`❌ Fout bij exporteren: ${error.message || 'Onbekende fout'}`);
+    }
+  };
+
+  // Bulk-import locaties voor alle klanten zonder locaties (maar met website)
+  const handleBulkImportLocations = async () => {
+    if (!window.confirm('Dit haalt locaties op voor alle klanten met een website maar zonder locaties. Dit kan even duren. Doorgaan?')) {
+      return;
+    }
+
+    setBulkImportingLocations(true);
+    setBulkImportProgress({ current: 0, total: 0 });
+
+    try {
+      // Haal alle klanten op
+      const allCustomers = await customerService.getAllCustomers();
+      
+      // Filter: klanten met website maar zonder locaties
+      const customersWithoutLocations = [];
+      for (const customer of allCustomers) {
+        if (customer.website) {
+          const locations = await customerService.getLocations(customer.id);
+          if (locations.length === 0) {
+            customersWithoutLocations.push(customer);
+          }
+        }
+      }
+
+      if (customersWithoutLocations.length === 0) {
+        alert('Geen klanten gevonden zonder locaties (met website).');
+        setBulkImportingLocations(false);
+        setBulkImportProgress(null);
+        return;
+      }
+
+      setBulkImportProgress({ current: 0, total: customersWithoutLocations.length });
+
+      let successCount = 0;
+      let errorCount = 0;
+      const errors: string[] = [];
+
+      // Verwerk elke klant
+      for (let i = 0; i < customersWithoutLocations.length; i++) {
+        const customer = customersWithoutLocations[i];
+        setBulkImportProgress({ current: i + 1, total: customersWithoutLocations.length });
+
+        try {
+          const functionsUrl = 'https://europe-west4-richting-sales-d764a.cloudfunctions.net/fetchLocationsForCustomer';
+          const response = await fetch(functionsUrl, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              customerId: customer.id,
+              customerName: customer.name,
+              website: customer.website
+            })
+          });
+
+          if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+          }
+
+          const data = await response.json();
+          const fetchedLocaties = data.locaties || [];
+
+          if (fetchedLocaties.length > 0) {
+            // Verwerk elke gevonden locatie
+            for (const locData of fetchedLocaties) {
+              try {
+                // Geocodeer adres
+                const geocodeResponse = await fetch(
+                  `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(`${locData.adres}, ${locData.stad}, Nederland`)}&limit=1&countrycodes=nl`,
+                  {
+                    headers: {
+                      'User-Agent': 'Richting-Kennisbank/1.0 (contact@richting.nl)'
+                    }
+                  }
+                );
+                
+                let coordinates: { latitude: number; longitude: number } | null = null;
+                if (geocodeResponse.ok) {
+                  const geocodeData = await geocodeResponse.json();
+                  if (geocodeData && geocodeData.length > 0) {
+                    coordinates = {
+                      latitude: parseFloat(geocodeData[0].lat),
+                      longitude: parseFloat(geocodeData[0].lon)
+                    };
+                  }
+                }
+
+                // Vind dichtstbijzijnde Richting locatie
+                let richtingLocatie = null;
+                if (coordinates) {
+                  const allRichtingLocaties = await richtingLocatiesService.getAllLocaties();
+                  const locatiesMetCoordinaten = allRichtingLocaties.filter(
+                    rl => rl.latitude !== undefined && rl.longitude !== undefined
+                  );
+                  
+                  if (locatiesMetCoordinaten.length > 0) {
+                    let nearest: { id: string; naam: string; distance: number } | null = null;
+                    let minDistance = Infinity;
+                    
+                    for (const rl of locatiesMetCoordinaten) {
+                      if (rl.latitude && rl.longitude) {
+                        const R = 6371; // Earth radius in km
+                        const dLat = (rl.latitude - coordinates.latitude) * Math.PI / 180;
+                        const dLon = (rl.longitude - coordinates.longitude) * Math.PI / 180;
+                        const a = 
+                          Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+                          Math.cos(coordinates.latitude * Math.PI / 180) * Math.cos(rl.latitude * Math.PI / 180) *
+                          Math.sin(dLon / 2) * Math.sin(dLon / 2);
+                        const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+                        const distance = R * c;
+                        
+                        if (distance < minDistance) {
+                          minDistance = distance;
+                          nearest = {
+                            id: rl.id,
+                            naam: rl.vestiging,
+                            distance: distance
+                          };
+                        }
+                      }
+                    }
+                    richtingLocatie = nearest;
+                  }
+                }
+
+                const locationToSave: Location = {
+                  id: `loc_${Date.now()}_${i}_${Math.random()}`,
+                  customerId: customer.id,
+                  name: locData.naam || 'Onbekende locatie',
+                  address: locData.adres,
+                  city: locData.stad,
+                  employeeCount: locData.aantalMedewerkers || 0,
+                  latitude: coordinates?.latitude,
+                  longitude: coordinates?.longitude,
+                  richtingLocatieId: richtingLocatie?.id,
+                  richtingLocatieNaam: richtingLocatie?.naam,
+                  richtingLocatieAfstand: richtingLocatie?.distance
+                };
+
+                await customerService.addLocation(locationToSave);
+              } catch (error: any) {
+                console.error(`Error processing location ${locData.naam} for ${customer.name}:`, error);
+              }
+            }
+
+            // Update customer.employeeCount
+            const updatedLocations = await customerService.getLocations(customer.id);
+            const totalEmployees = updatedLocations.reduce((sum, loc) => sum + (loc.employeeCount || 0), 0);
+            if (totalEmployees > 0) {
+              await customerService.updateCustomer(customer.id, { employeeCount: totalEmployees });
+            }
+
+            successCount++;
+          } else {
+            errorCount++;
+            errors.push(`${customer.name}: Geen locaties gevonden`);
+          }
+        } catch (error: any) {
+          errorCount++;
+          errors.push(`${customer.name}: ${error.message || 'Onbekende fout'}`);
+          console.error(`Error fetching locations for ${customer.name}:`, error);
+        }
+
+        // Kleine delay om rate limiting te voorkomen
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      }
+
+      alert(`✅ Bulk-import voltooid!\n\n✅ ${successCount} klanten verwerkt\n❌ ${errorCount} fouten${errors.length > 0 ? `\n\nFouten:\n${errors.slice(0, 10).join('\n')}${errors.length > 10 ? `\n... en ${errors.length - 10} meer` : ''}` : ''}`);
+    } catch (error: any) {
+      console.error('Error in bulk import:', error);
+      alert(`❌ Fout bij bulk-import: ${error.message || 'Onbekende fout'}`);
+    } finally {
+      setBulkImportingLocations(false);
+      setBulkImportProgress(null);
     }
   };
 
@@ -5899,6 +6257,20 @@ const SettingsView = ({ user }: { user: User }) => {
                       className="bg-green-600 text-white px-4 py-2 rounded-lg font-bold hover:bg-green-700 transition-colors text-sm"
                     >
                       📤 Importeer (CSV/Google Sheets)
+                    </button>
+                    <button
+                      onClick={handleBulkImportLocations}
+                      disabled={bulkImportingLocations}
+                      className={`px-4 py-2 rounded-lg font-bold transition-colors text-sm ${
+                        bulkImportingLocations
+                          ? 'bg-gray-400 text-gray-200 cursor-not-allowed'
+                          : 'bg-richting-orange text-white hover:bg-orange-600'
+                      }`}
+                    >
+                      {bulkImportingLocations 
+                        ? `⏳ Ophalen... ${bulkImportProgress ? `(${bulkImportProgress.current}/${bulkImportProgress.total})` : ''}`
+                        : '🔍 Locaties ophalen (bulk)'
+                      }
                     </button>
                   </div>
                 </div>
