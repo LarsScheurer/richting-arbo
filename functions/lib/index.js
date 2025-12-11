@@ -2595,6 +2595,8 @@ Geef het volledige rapport terug in markdown formaat. Geef ALLEEN het rapport, g
             'progress.huidigeStap': aantalHoofdstukken,
             updatedAt: admin.firestore.FieldValue.serverTimestamp()
         });
+        console.log('✅ Analyse voltooid, status op completed gezet');
+        
         // Also save as OrganisatieProfiel if customerId provided
         if (customerId) {
             try {
@@ -2615,6 +2617,37 @@ Geef het volledige rapport terug in markdown formaat. Geef ALLEEN het rapport, g
                 };
                 await profielRef.add(profielData);
                 console.log('✅ OrganisatieProfiel opgeslagen');
+                
+                // AUTOMATISCH: Sla analyse op als document in Klantdossier
+                try {
+                    const documentRef = db.collection('documents');
+                    const documentData = {
+                        title: `Publiek Organisatie Profiel - ${organisatieNaam}`,
+                        content: volledigRapport, // Volledige analyse tekst
+                        type: 'PDF', // Document type
+                        uploadedBy: 'system', // System generated
+                        uploadedAt: new Date().toISOString(),
+                        customerId: customerId, // Koppel aan klant
+                        summary: `Organisatie analyse voor ${organisatieNaam} gebaseerd op publieke informatie. Bevat risicoanalyse, processen en functies.`,
+                        mainCategoryId: 'hr', // HR & Organisatie
+                        subCategoryId: 'handbook', // Handboek
+                        tags: ['organisatie-analyse', 'publiek-profiel', 'risico-analyse', organisatieNaam.toLowerCase()],
+                        viewedBy: [],
+                        likedBy: [],
+                        isArchived: false,
+                        // Extra metadata voor analyse documenten
+                        analyseId: analyseId,
+                        organisatieNaam: organisatieNaam,
+                        website: website,
+                        totaalScore: totaalScore,
+                        gemiddeldeRisicoScore: gemiddeldeRisicoScore
+                    };
+                    await documentRef.add(documentData);
+                    console.log('✅✅✅ Analyse automatisch opgeslagen als document in Klantdossier');
+                } catch (docError) {
+                    console.error('❌ Error saving analyse as document:', docError);
+                    // Don't fail the whole process if document save fails
+                }
             }
             catch (error) {
                 console.error('Error saving OrganisatieProfiel:', error);

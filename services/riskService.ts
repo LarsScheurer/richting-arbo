@@ -161,20 +161,24 @@ export async function getRiskAssessment(riskId: string): Promise<RiskAssessment 
  */
 export async function getRisksByCustomer(customerId: string): Promise<RiskAssessment[]> {
   try {
+    // Query without orderBy to avoid index requirement, then sort in memory
     const q = query(
       collection(db, 'riskAssessments'),
-      where('customerId', '==', customerId),
-      orderBy('calculatedScore', 'desc') // Highest risk first
+      where('customerId', '==', customerId)
     );
     
     const snapshot = await getDocs(q);
-    return snapshot.docs.map(doc => ({
+    const risks = snapshot.docs.map(doc => ({
       id: doc.id,
       ...doc.data()
     } as RiskAssessment));
+    
+    // Sort by calculatedScore descending in memory (highest risk first)
+    return risks.sort((a, b) => (b.calculatedScore || 0) - (a.calculatedScore || 0));
   } catch (error) {
     console.error('Error getting risks by customer:', error);
-    throw error;
+    // Return empty array instead of throwing to prevent app crash
+    return [];
   }
 }
 
@@ -183,20 +187,24 @@ export async function getRisksByCustomer(customerId: string): Promise<RiskAssess
  */
 export async function getRisksByProcess(processId: string): Promise<RiskAssessment[]> {
   try {
+    // Query without orderBy to avoid index requirement, then sort in memory
     const q = query(
       collection(db, 'riskAssessments'),
-      where('processId', '==', processId),
-      orderBy('calculatedScore', 'desc')
+      where('processId', '==', processId)
     );
     
     const snapshot = await getDocs(q);
-    return snapshot.docs.map(doc => ({
+    const risks = snapshot.docs.map(doc => ({
       id: doc.id,
       ...doc.data()
     } as RiskAssessment));
+    
+    // Sort by calculatedScore descending in memory
+    return risks.sort((a, b) => (b.calculatedScore || 0) - (a.calculatedScore || 0));
   } catch (error) {
     console.error('Error getting risks by process:', error);
-    throw error;
+    // Return empty array instead of throwing to prevent app crash
+    return [];
   }
 }
 
@@ -205,20 +213,24 @@ export async function getRisksByProcess(processId: string): Promise<RiskAssessme
  */
 export async function getRisksByFunction(functionId: string): Promise<RiskAssessment[]> {
   try {
+    // Query without orderBy to avoid index requirement, then sort in memory
     const q = query(
       collection(db, 'riskAssessments'),
-      where('functionId', '==', functionId),
-      orderBy('calculatedScore', 'desc')
+      where('functionId', '==', functionId)
     );
     
     const snapshot = await getDocs(q);
-    return snapshot.docs.map(doc => ({
+    const risks = snapshot.docs.map(doc => ({
       id: doc.id,
       ...doc.data()
     } as RiskAssessment));
+    
+    // Sort by calculatedScore descending in memory
+    return risks.sort((a, b) => (b.calculatedScore || 0) - (a.calculatedScore || 0));
   } catch (error) {
     console.error('Error getting risks by function:', error);
-    throw error;
+    // Return empty array instead of throwing to prevent app crash
+    return [];
   }
 }
 
@@ -227,20 +239,24 @@ export async function getRisksByFunction(functionId: string): Promise<RiskAssess
  */
 export async function getRisksBySubstance(substanceId: string): Promise<RiskAssessment[]> {
   try {
+    // Query without orderBy to avoid index requirement, then sort in memory
     const q = query(
       collection(db, 'riskAssessments'),
-      where('substanceId', '==', substanceId),
-      orderBy('calculatedScore', 'desc')
+      where('substanceId', '==', substanceId)
     );
     
     const snapshot = await getDocs(q);
-    return snapshot.docs.map(doc => ({
+    const risks = snapshot.docs.map(doc => ({
       id: doc.id,
       ...doc.data()
     } as RiskAssessment));
+    
+    // Sort by calculatedScore descending in memory
+    return risks.sort((a, b) => (b.calculatedScore || 0) - (a.calculatedScore || 0));
   } catch (error) {
     console.error('Error getting risks by substance:', error);
-    throw error;
+    // Return empty array instead of throwing to prevent app crash
+    return [];
   }
 }
 
@@ -252,12 +268,10 @@ export async function getHighImpactRisks(
   threshold: number = 200
 ): Promise<RiskAssessment[]> {
   try {
-    // Note: Firestore doesn't support > operator directly in queries
-    // We fetch all and filter in memory, or use a compound index
+    // Query without orderBy to avoid index requirement
     const q = query(
       collection(db, 'riskAssessments'),
-      where('customerId', '==', customerId),
-      orderBy('calculatedScore', 'desc')
+      where('customerId', '==', customerId)
     );
     
     const snapshot = await getDocs(q);
@@ -266,11 +280,14 @@ export async function getHighImpactRisks(
       ...doc.data()
     } as RiskAssessment));
     
-    // Filter by threshold
-    return allRisks.filter(risk => risk.calculatedScore >= threshold);
+    // Filter by threshold and sort in memory
+    return allRisks
+      .filter(risk => risk.calculatedScore >= threshold)
+      .sort((a, b) => (b.calculatedScore || 0) - (a.calculatedScore || 0));
   } catch (error) {
     console.error('Error getting high-impact risks:', error);
-    throw error;
+    // Return empty array instead of throwing to prevent app crash
+    return [];
   }
 }
 
@@ -302,9 +319,7 @@ export async function getRisksByFilter(filter: RiskFilter): Promise<RiskAssessme
       constraints.push(where('priority', '==', filter.priority));
     }
     
-    // Always order by score
-    constraints.push(orderBy('calculatedScore', 'desc'));
-    
+    // Don't use orderBy in query to avoid index requirement, sort in memory instead
     const q = query(collection(db, 'riskAssessments'), ...constraints);
     const snapshot = await getDocs(q);
     
@@ -321,7 +336,8 @@ export async function getRisksByFilter(filter: RiskFilter): Promise<RiskAssessme
       risks = risks.filter(r => r.calculatedScore <= filter.maxScore!);
     }
     
-    return risks;
+    // Sort by calculatedScore descending in memory
+    return risks.sort((a, b) => (b.calculatedScore || 0) - (a.calculatedScore || 0));
   } catch (error) {
     console.error('Error getting risks by filter:', error);
     throw error;
@@ -337,25 +353,31 @@ export async function getRisksByProcessAndSubstance(
   substanceId: string
 ): Promise<RiskAssessment[]> {
   try {
-    // Firestore doesn't support AND queries on different fields easily
-    // We need to fetch and filter, or use a compound query
+    // Query without orderBy to avoid index requirement
     const q = query(
       collection(db, 'riskAssessments'),
       where('processId', '==', processId),
-      where('substanceId', '==', substanceId),
-      orderBy('calculatedScore', 'desc')
+      where('substanceId', '==', substanceId)
     );
     
     const snapshot = await getDocs(q);
-    return snapshot.docs.map(doc => ({
+    const risks = snapshot.docs.map(doc => ({
       id: doc.id,
       ...doc.data()
     } as RiskAssessment));
+    
+    // Sort by calculatedScore descending in memory
+    return risks.sort((a, b) => (b.calculatedScore || 0) - (a.calculatedScore || 0));
   } catch (error) {
     console.error('Error getting risks by process and substance:', error);
-    // If compound query fails, fallback to fetching and filtering
-    const processRisks = await getRisksByProcess(processId);
-    return processRisks.filter(r => r.substanceId === substanceId);
+    // If query fails, fallback to fetching and filtering
+    try {
+      const processRisks = await getRisksByProcess(processId);
+      return processRisks.filter(r => r.substanceId === substanceId);
+    } catch (fallbackError) {
+      console.error('Fallback also failed:', fallbackError);
+      return [];
+    }
   }
 }
 

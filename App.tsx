@@ -736,6 +736,8 @@ const CustomerDetailView = ({
   const [organisatieProfiel, setOrganisatieProfiel] = useState<OrganisatieProfiel | null>(null);
   const [selectedProces, setSelectedProces] = useState<Proces | null>(null);
   const [selectedFunctie, setSelectedFunctie] = useState<Functie | null>(null);
+  const [selectedFunctieRisicos, setSelectedFunctieRisicos] = useState<RiskAssessment[]>([]);
+  const [functieRisicoCounts, setFunctieRisicoCounts] = useState<{[functionId: string]: number}>({});
   const [isAddingLoc, setIsAddingLoc] = useState(false);
   const [isAddingContact, setIsAddingContact] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
@@ -789,6 +791,35 @@ const CustomerDetailView = ({
       setContacts(conts);
       setDocs(documents);
       setOrganisatieProfiel(profiel);
+      
+      // Haal risico counts op voor alle functies (in achtergrond, niet blokkerend)
+      // Doe dit asynchroon zodat het de loadData niet blokkeert
+      if (profiel && profiel.functies && Array.isArray(profiel.functies) && profiel.functies.length > 0) {
+        // Start async, maar wacht niet op completion
+        Promise.all(
+          profiel.functies.map(async (functie) => {
+            try {
+              if (functie && functie.id) {
+                const risicos = await getRisksByFunction(functie.id);
+                setFunctieRisicoCounts(prev => ({
+                  ...prev,
+                  [functie.id]: risicos.length
+                }));
+              }
+            } catch (error) {
+              console.error(`Error loading risks for function ${functie?.id}:`, error);
+              if (functie && functie.id) {
+                setFunctieRisicoCounts(prev => ({
+                  ...prev,
+                  [functie.id]: 0
+                }));
+              }
+            }
+          })
+        ).catch(error => {
+          console.error('Error loading function risk counts:', error);
+        });
+      }
        
       // Update locaties zonder coordinaten of richtingLocatieId
       const locatiesTeUpdaten = locs.filter(loc => 
@@ -827,7 +858,13 @@ const CustomerDetailView = ({
         });
       }
     } catch (error) {
-      console.error('Error loading customer data:', error);
+      console.error('❌ Error loading customer data:', error);
+      // Zorg dat de app niet crasht - toon lege state maar geen error
+      setLocations([]);
+      setContacts([]);
+      setDocs([]);
+      setOrganisatieProfiel(null);
+      setFunctieRisicoCounts({});
     }
   };
 
@@ -1626,6 +1663,17 @@ const CustomerDetailView = ({
                          clearInterval(pollInterval);
                          setIsAnalyzingOrganisatie(false);
                          
+                         // AUTOMATISCH: Refresh documenten in Klantdossier
+                         // Het document wordt automatisch aangemaakt door de backend
+                         // We moeten de documenten opnieuw ophalen
+                         try {
+                           const refreshedDocs = await dbService.getDocumentsForCustomer(customer.id);
+                           setDocs(refreshedDocs);
+                           console.log('✅ Documenten gerefresht na voltooide analyse');
+                         } catch (error) {
+                           console.error('❌ Error refreshing documents:', error);
+                         }
+                         
                          // Show volledig rapport if available
                          if (progress.volledigRapport) {
                            setOrganisatieAnalyseResultaat(progress.volledigRapport);
@@ -2294,24 +2342,29 @@ const CustomerDetailView = ({
                 <span className="text-2xl">⚙️</span> Processen ({organisatieProfiel.processen?.length || 0})
               </h4>
               <div className="space-y-3 max-h-96 overflow-y-auto">
-                {organisatieProfiel.processen
-                  ?.map(proces => {
-                    const risicos = proces.risicos || [];
-                    // Bereken prioriteit voor dit proces
-                    const risicosMetBerekening = risicos.map(item => {
-                      const risico = item.risico || organisatieProfiel.risicos.find(r => r.id === item.risicoId);
-                      if (!risico) return null;
-                      const blootstelling = item.blootstelling || 3;
-                      const kans = convertKansToFineKinney(risico.kans);
-                      const effect = convertEffectToFineKinney(risico.effect);
-                      const risicogetal = blootstelling * kans * effect;
-                      return { risico, blootstelling, kans, effect, risicogetal };
-                    }).filter(Boolean);
-                    const gemiddeldePrioriteit = risicosMetBerekening.length > 0 
-                      ? risicosMetBerekening.reduce((sum, r) => sum + (r?.risicogetal || 0), 0) / risicosMetBerekening.length
-                      : 0;
-                    const prioriteitNiveau = gemiddeldePrioriteit >= 400 ? 1 : gemiddeldePrioriteit >= 200 ? 2 : gemiddeldePrioriteit >= 100 ? 3 : gemiddeldePrioriteit >= 50 ? 4 : 5;
-                    return { proces, prioriteitNiveau, risicos };
+                {(organisatieProfiel.processen || [])
+                  .map(proces => {
+                    try {
+                      const risicos = proces.risicos || [];
+                      // Bereken prioriteit voor dit proces
+                      const risicosMetBerekening = risicos.map(item => {
+                        const risico = item.risico || (organisatieProfiel.risicos || []).find(r => r.id === item.risicoId);
+                        if (!risico) return null;
+                        const blootstelling = item.blootstelling || 3;
+                        const kans = convertKansToFineKinney(risico.kans);
+                        const effect = convertEffectToFineKinney(risico.effect);
+                        const risicogetal = blootstelling * kans * effect;
+                        return { risico, blootstelling, kans, effect, risicogetal };
+                      }).filter(Boolean);
+                      const gemiddeldePrioriteit = risicosMetBerekening.length > 0 
+                        ? risicosMetBerekening.reduce((sum, r) => sum + (r?.risicogetal || 0), 0) / risicosMetBerekening.length
+                        : 0;
+                      const prioriteitNiveau = gemiddeldePrioriteit >= 400 ? 1 : gemiddeldePrioriteit >= 200 ? 2 : gemiddeldePrioriteit >= 100 ? 3 : gemiddeldePrioriteit >= 50 ? 4 : 5;
+                      return { proces, prioriteitNiveau, risicos };
+                    } catch (error) {
+                      console.error(`Error processing proces ${proces.id}:`, error);
+                      return { proces, prioriteitNiveau: 5, risicos: [] };
+                    }
                   })
                   .sort((a, b) => (a?.prioriteitNiveau || 5) - (b?.prioriteitNiveau || 5))
                   .map(({ proces, prioriteitNiveau, risicos }) => {
@@ -2351,24 +2404,29 @@ const CustomerDetailView = ({
                 <span className="text-2xl">👥</span> Functies ({organisatieProfiel.functies?.length || 0})
               </h4>
               <div className="space-y-3 max-h-96 overflow-y-auto">
-                {organisatieProfiel.functies
-                  ?.map(functie => {
-                    const risicos = functie.risicos || [];
-                    // Bereken prioriteit voor deze functie
-                    const risicosMetBerekening = risicos.map(item => {
-                      const risico = item.risico || organisatieProfiel.risicos.find(r => r.id === item.risicoId);
-                      if (!risico) return null;
-                      const blootstelling = item.blootstelling || 3;
-                      const kans = convertKansToFineKinney(risico.kans);
-                      const effect = convertEffectToFineKinney(risico.effect);
-                      const risicogetal = blootstelling * kans * effect;
-                      return { risico, blootstelling, kans, effect, risicogetal };
-                    }).filter(Boolean);
-                    const gemiddeldePrioriteit = risicosMetBerekening.length > 0 
-                      ? risicosMetBerekening.reduce((sum, r) => sum + (r?.risicogetal || 0), 0) / risicosMetBerekening.length
-                      : 0;
-                    const prioriteitNiveau = gemiddeldePrioriteit >= 400 ? 1 : gemiddeldePrioriteit >= 200 ? 2 : gemiddeldePrioriteit >= 100 ? 3 : gemiddeldePrioriteit >= 50 ? 4 : 5;
-                    return { functie, prioriteitNiveau, risicos };
+                {(organisatieProfiel.functies || [])
+                  .map(functie => {
+                    try {
+                      const risicos = functie.risicos || [];
+                      // Bereken prioriteit voor deze functie
+                      const risicosMetBerekening = risicos.map(item => {
+                        const risico = item.risico || (organisatieProfiel.risicos || []).find(r => r.id === item.risicoId);
+                        if (!risico) return null;
+                        const blootstelling = item.blootstelling || 3;
+                        const kans = convertKansToFineKinney(risico.kans);
+                        const effect = convertEffectToFineKinney(risico.effect);
+                        const risicogetal = blootstelling * kans * effect;
+                        return { risico, blootstelling, kans, effect, risicogetal };
+                      }).filter(Boolean);
+                      const gemiddeldePrioriteit = risicosMetBerekening.length > 0 
+                        ? risicosMetBerekening.reduce((sum, r) => sum + (r?.risicogetal || 0), 0) / risicosMetBerekening.length
+                        : 0;
+                      const prioriteitNiveau = gemiddeldePrioriteit >= 400 ? 1 : gemiddeldePrioriteit >= 200 ? 2 : gemiddeldePrioriteit >= 100 ? 3 : gemiddeldePrioriteit >= 50 ? 4 : 5;
+                      return { functie, prioriteitNiveau, risicos };
+                    } catch (error) {
+                      console.error(`Error processing functie ${functie.id}:`, error);
+                      return { functie, prioriteitNiveau: 5, risicos: [] };
+                    }
                   })
                   .sort((a, b) => (a?.prioriteitNiveau || 5) - (b?.prioriteitNiveau || 5))
                   .map(({ functie, prioriteitNiveau, risicos }) => {
@@ -2378,7 +2436,18 @@ const CustomerDetailView = ({
                     return (
                       <div 
                         key={functie.id} 
-                        onClick={() => setSelectedFunctie(functie)}
+                        onClick={async () => {
+                          setSelectedFunctie(functie);
+                          // Haal risico's op voor deze functie
+                          try {
+                            const functieRisicos = await getRisksByFunction(functie.id);
+                            setSelectedFunctieRisicos(functieRisicos);
+                            console.log(`✅ ${functieRisicos.length} risico's opgehaald voor functie ${functie.naam}`);
+                          } catch (error) {
+                            console.error('❌ Error loading risks for function:', error);
+                            setSelectedFunctieRisicos([]);
+                          }
+                        }}
                         className="p-4 bg-gradient-to-r from-gray-50 to-white border-2 border-gray-200 rounded-lg cursor-pointer hover:border-richting-orange hover:shadow-md transition-all group"
                       >
                         <div className="flex justify-between items-start mb-2">
@@ -2414,7 +2483,7 @@ const CustomerDetailView = ({
                         )}
                         <div className="flex items-center gap-4 mt-3 pt-3 border-t border-gray-200">
                           <span className="text-xs text-gray-500 flex items-center gap-1">
-                            <span className="text-richting-orange">⚠️</span> {risicos.length} risico{risicos.length !== 1 ? "'s" : ""}
+                            <span className="text-richting-orange">⚠️</span> {functieRisicoCounts[functie.id] ?? risicos.length} risico{(functieRisicoCounts[functie.id] ?? risicos.length) !== 1 ? "'s" : ""}
                           </span>
                           <span className="text-xs text-richting-orange font-medium group-hover:underline">Details bekijken →</span>
                         </div>
@@ -2514,7 +2583,11 @@ const CustomerDetailView = ({
                      {selectedProces ? `⚙️ Proces: ${selectedProces.naam}` : `👥 Functie: ${selectedFunctie?.naam}`}
                    </h3>
                    <button 
-                     onClick={() => { setSelectedProces(null); setSelectedFunctie(null); }}
+                     onClick={() => { 
+                       setSelectedProces(null); 
+                       setSelectedFunctie(null);
+                       setSelectedFunctieRisicos([]);
+                     }}
                      className="text-white hover:text-gray-200 text-2xl font-bold w-8 h-8 flex items-center justify-center rounded-full hover:bg-white/20 transition-colors"
                    >
                      ✕
@@ -2645,87 +2718,116 @@ const CustomerDetailView = ({
                            </div>
                          </div>
                        </div>
-                       <h4 className="font-bold text-slate-900 mb-4 text-lg flex items-center gap-2">
-                         <span>⚠️</span> Risico's ({selectedFunctie.risicos?.length || 0})
-                       </h4>
-                       <div className="overflow-x-auto border border-gray-200 rounded-lg">
-                         <table className="min-w-full divide-y divide-gray-200">
-                           <thead className="bg-gradient-to-r from-gray-100 to-gray-50">
-                             <tr>
-                               <th className="px-4 py-3 text-left text-xs font-bold text-gray-700 uppercase">Risico</th>
-                               <th className="px-4 py-3 text-left text-xs font-bold text-gray-700 uppercase">Categorie</th>
-                               <th className="px-4 py-3 text-left text-xs font-bold text-gray-700 uppercase">Blootstelling (B)</th>
-                               <th className="px-4 py-3 text-left text-xs font-bold text-gray-700 uppercase">Kans (W)</th>
-                               <th className="px-4 py-3 text-left text-xs font-bold text-gray-700 uppercase">Effect (E)</th>
-                               <th className="px-4 py-3 text-left text-xs font-bold text-gray-700 uppercase">Risicogetal (R)</th>
-                               <th className="px-4 py-3 text-left text-xs font-bold text-gray-700 uppercase">Prioriteit</th>
-                             </tr>
-                           </thead>
-                           <tbody className="bg-white divide-y divide-gray-200">
-                             {selectedFunctie.risicos
-                               ?.map((item, idx) => {
-                                 const risico = item.risico || organisatieProfiel.risicos.find(r => r.id === item.risicoId);
-                                 if (!risico) return null;
-                                 const blootstelling = item.blootstelling || 3;
-                                 const kans = convertKansToFineKinney(risico.kans);
-                                 const effect = convertEffectToFineKinney(risico.effect);
-                                 const risicogetal = blootstelling * kans * effect;
-                                 const prioriteitNiveau = risicogetal >= 400 ? 1 : risicogetal >= 200 ? 2 : risicogetal >= 100 ? 3 : risicogetal >= 50 ? 4 : 5;
-                                 return { item, risico, blootstelling, kans, effect, risicogetal, prioriteitNiveau, idx };
-                               })
-                               .filter(Boolean)
-                               .sort((a, b) => (a?.prioriteitNiveau || 5) - (b?.prioriteitNiveau || 5))
-                               .map((data) => {
-                                 if (!data) return null;
-                                 const { risico, blootstelling, kans, effect, risicogetal, prioriteitNiveau } = data;
-                                 const prioriteitLabels = ['Zeer hoog', 'Hoog', 'Middel', 'Laag', 'Zeer laag'];
-                                 const prioriteitColors = ['bg-red-100 text-red-700', 'bg-orange-100 text-orange-700', 'bg-yellow-100 text-yellow-700', 'bg-blue-100 text-blue-700', 'bg-green-100 text-green-700'];
-                                 const categorieColors = {
-                                   'fysiek': 'bg-blue-100 text-blue-700',
-                                   'psychisch': 'bg-purple-100 text-purple-700',
-                                   'overige': 'bg-gray-100 text-gray-700'
-                                 };
-                                 
-                                 return (
-                                   <tr key={data.idx} className="hover:bg-gray-50 transition-colors">
-                                     <td className="px-4 py-3 text-sm font-medium text-gray-900">{risico.naam}</td>
-                                     <td className="px-4 py-3">
-                                       <span className={`px-2 py-1 rounded text-xs font-medium ${categorieColors[risico.categorie] || categorieColors.overige}`}>
-                                         {risico.categorie}
-                                       </span>
-                                     </td>
-                                     <td className="px-4 py-3 text-sm text-gray-700 font-medium">{blootstelling}</td>
-                                     <td className="px-4 py-3 text-sm text-gray-700 font-medium">{kans}</td>
-                                     <td className="px-4 py-3 text-sm text-gray-700 font-medium">{effect}</td>
-                                     <td className="px-4 py-3 text-sm font-bold text-richting-orange">{risicogetal}</td>
-                                     <td className="px-4 py-3">
-                                       <span className={`px-3 py-1 rounded-lg text-xs font-bold border-2 ${prioriteitColors[prioriteitNiveau - 1]}`}>
-                                         {prioriteitNiveau}. {prioriteitLabels[prioriteitNiveau - 1]}
-                                       </span>
-                                     </td>
-                                   </tr>
-                                 );
-                               })}
-                           </tbody>
-                           <tfoot className="bg-gradient-to-r from-gray-100 to-gray-50">
-                             <tr>
-                               <td colSpan={6} className="px-4 py-3 text-right text-sm font-bold text-gray-900">Totaal Risicogetal:</td>
-                               <td className="px-4 py-3 text-sm font-bold text-richting-orange text-lg">
-                                 {selectedFunctie.risicos
-                                   ?.map(item => {
-                                     const risico = item.risico || organisatieProfiel.risicos.find(r => r.id === item.risicoId);
-                                     if (!risico) return 0;
-                                     const blootstelling = item.blootstelling || 3;
-                                     const kans = convertKansToFineKinney(risico.kans);
-                                     const effect = convertEffectToFineKinney(risico.effect);
-                                     return blootstelling * kans * effect;
-                                   })
-                                   .reduce((sum, val) => sum + val, 0) || 0}
-                               </td>
-                             </tr>
-                           </tfoot>
-                         </table>
-                       </div>
+                      {(() => {
+                        const risicoRows =
+                          (selectedFunctieRisicos.length > 0
+                            ? selectedFunctieRisicos.map((risk, idx) => ({
+                                key: risk.id || idx,
+                                naam: risk.riskName,
+                                categorie: risk.category || 'Overige',
+                                blootstelling: risk.exposure ?? 3,
+                                kans: risk.probability ?? 3,
+                                effect: risk.effect ?? 3,
+                                score: risk.calculatedScore ?? ((risk.exposure ?? 3) * (risk.probability ?? 3) * (risk.effect ?? 3))
+                              }))
+                            : (selectedFunctie?.risicos || []).map((item, idx) => {
+                                const risico = item.risico || organisatieProfiel.risicos.find(r => r.id === item.risicoId);
+                                if (!risico) return null;
+                                const blootstelling = item.blootstelling || 3;
+                                const kans = convertKansToFineKinney(risico.kans);
+                                const effect = convertEffectToFineKinney(risico.effect);
+                                const score = blootstelling * kans * effect;
+                                return {
+                                  key: risico.id || idx,
+                                  naam: risico.naam,
+                                  categorie: risico.categorie || 'Overige',
+                                  blootstelling,
+                                  kans,
+                                  effect,
+                                  score
+                                };
+                              }).filter(Boolean)) as Array<{
+                                key: string | number;
+                                naam: string;
+                                categorie: string;
+                                blootstelling: number;
+                                kans: number;
+                                effect: number;
+                                score: number;
+                              }>;
+
+                        const prioriteitLabels = ['Zeer hoog', 'Hoog', 'Middel', 'Laag', 'Zeer laag'];
+                        const prioriteitColors = ['bg-red-100 text-red-700 border-red-300', 'bg-orange-100 text-orange-700 border-orange-300', 'bg-yellow-100 text-yellow-700 border-yellow-300', 'bg-blue-100 text-blue-700 border-blue-300', 'bg-green-100 text-green-700 border-green-300'];
+                        const categorieColors: {[key: string]: string} = {
+                          'Fysiek': 'bg-blue-100 text-blue-700',
+                          'Psychisch': 'bg-purple-100 text-purple-700',
+                          'Chemisch': 'bg-orange-100 text-orange-700',
+                          'Biologisch': 'bg-green-100 text-green-700',
+                          'Ergonomisch': 'bg-yellow-100 text-yellow-700',
+                          'Overige': 'bg-gray-100 text-gray-700'
+                        };
+
+                        return (
+                          <>
+                            <h4 className="font-bold text-slate-900 mb-4 text-lg flex items-center gap-2">
+                              <span>⚠️</span> Risico's ({risicoRows.length})
+                            </h4>
+                            {risicoRows.length === 0 ? (
+                              <div className="bg-gray-50 border border-gray-200 rounded-lg p-6 text-center">
+                                <p className="text-gray-500 text-sm">Geen risico's gekoppeld aan deze functie.</p>
+                              </div>
+                            ) : (
+                              <div className="overflow-x-auto border border-gray-200 rounded-lg">
+                                <table className="min-w-full divide-y divide-gray-200">
+                                  <thead className="bg-gradient-to-r from-gray-100 to-gray-50">
+                                    <tr>
+                                      <th className="px-4 py-3 text-left text-xs font-bold text-gray-700 uppercase">Risico</th>
+                                      <th className="px-4 py-3 text-left text-xs font-bold text-gray-700 uppercase">Categorie</th>
+                                      <th className="px-4 py-3 text-left text-xs font-bold text-gray-700 uppercase">Blootstelling (B)</th>
+                                      <th className="px-4 py-3 text-left text-xs font-bold text-gray-700 uppercase">Kans (W)</th>
+                                      <th className="px-4 py-3 text-left text-xs font-bold text-gray-700 uppercase">Effect (E)</th>
+                                      <th className="px-4 py-3 text-left text-xs font-bold text-gray-700 uppercase">Risicogetal (R)</th>
+                                      <th className="px-4 py-3 text-left text-xs font-bold text-gray-700 uppercase">Prioriteit</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody className="bg-white divide-y divide-gray-200">
+                                    {risicoRows.map((risk, idx) => {
+                                      const prioriteitNiveau = risk.score >= 400 ? 1 : risk.score >= 200 ? 2 : risk.score >= 100 ? 3 : risk.score >= 50 ? 4 : 5;
+                                      return (
+                                        <tr key={risk.key ?? idx} className="hover:bg-gray-50 transition-colors">
+                                          <td className="px-4 py-3 text-sm font-medium text-gray-900">{risk.naam}</td>
+                                          <td className="px-4 py-3">
+                                            <span className={`px-2 py-1 rounded text-xs font-medium ${categorieColors[risk.categorie] || categorieColors['Overige']}`}>
+                                              {risk.categorie}
+                                            </span>
+                                          </td>
+                                          <td className="px-4 py-3 text-sm text-gray-700 font-medium">{risk.blootstelling}</td>
+                                          <td className="px-4 py-3 text-sm text-gray-700 font-medium">{risk.kans}</td>
+                                          <td className="px-4 py-3 text-sm text-gray-700 font-medium">{risk.effect}</td>
+                                          <td className="px-4 py-3 text-sm font-bold text-richting-orange">{risk.score}</td>
+                                          <td className="px-4 py-3">
+                                            <span className={`px-3 py-1 rounded-lg text-xs font-bold border-2 ${prioriteitColors[prioriteitNiveau - 1]}`}>
+                                              {prioriteitNiveau}. {prioriteitLabels[prioriteitNiveau - 1]}
+                                            </span>
+                                          </td>
+                                        </tr>
+                                      );
+                                    })}
+                                  </tbody>
+                                  <tfoot className="bg-gradient-to-r from-gray-100 to-gray-50">
+                                    <tr>
+                                      <td colSpan={6} className="px-4 py-3 text-right text-sm font-bold text-gray-900">Totaal Risicogetal:</td>
+                                      <td className="px-4 py-3 text-sm font-bold text-richting-orange text-lg">
+                                        {risicoRows.reduce((sum, risk) => sum + (risk.score || 0), 0)}
+                                      </td>
+                                    </tr>
+                                  </tfoot>
+                                </table>
+                              </div>
+                            )}
+                          </>
+                        );
+                      })()}
                      </>
                    )}
                  </div>
