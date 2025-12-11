@@ -31,7 +31,7 @@ import { DocumentSource, User, UserRole, DocType, Customer, BackupData, Location
 
 // --- STAP 1: CONFIGURATIE ---
 const firebaseConfig = {
-  apiKey: "AIzaSyDZh5R0sSQ-T3mnk9XS8WA0GV0t_xjD0pY",
+  apiKey: "AIzaSyDOnAWJPz7Z9ZoSovlIY_9HCKAAJfQRrPc",
   authDomain: "richting-sales-d764a.firebaseapp.com",
   projectId: "richting-sales-d764a",
   storageBucket: "richting-sales-d764a.firebasestorage.app",

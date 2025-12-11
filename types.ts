@@ -37,6 +37,7 @@ export interface Location {
   longitude?: number; // Geocodeerde longitude
   richtingLocatieId?: string; // ID van dichtstbijzijnde Richting locatie
   richtingLocatieNaam?: string; // Naam van dichtstbijzijnde Richting locatie
+  richtingLocatieAfstand?: number; // Afstand in kilometers tot dichtstbijzijnde Richting locatie
 }
 
 export interface KlantreisLevel {
@@ -56,6 +57,7 @@ export interface Customer {
   logoUrl?: string;
   assignedUserIds: string[]; // List of users who have access to this client
   createdAt: string;
+  employeeCount?: number; // Aantal medewerkers bij de klant
   klantreis?: {
     levels: KlantreisLevel[];
     socialControlsScore?: number; // Final score (0-100)

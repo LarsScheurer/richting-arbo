@@ -61,13 +61,43 @@ export const Layout: React.FC<LayoutProps> = ({ children, user, onLogout, curren
     return <div className="min-h-screen bg-gray-50 flex flex-col">{children}</div>;
   }
 
+  const [expandedCategories, setExpandedCategories] = React.useState<Set<string>>(new Set());
+
+  // Auto-expand category if current view is a sub-item
+  useEffect(() => {
+    const categories = [
+      {
+        id: 'richting',
+        subItems: [
+          { id: 'regio' }
+        ]
+      }
+    ];
+    categories.forEach(category => {
+      if (category.subItems.some(subItem => currentView === subItem.id)) {
+        setExpandedCategories(prev => new Set(prev).add(category.id));
+      }
+    });
+  }, [currentView]);
+
   const navItems = [
     { id: 'dashboard', label: 'De Krant', icon: '📰' },
     { id: 'customers', label: 'Klanten', icon: '💼' },
     { id: 'knowledge', label: 'Kennisbank', icon: '📚' },
     { id: 'chat', label: 'Vraag het Gemini', icon: '✨' },
     { id: 'upload', label: 'Nieuwe Bron', icon: '➕' },
-    { id: 'regio', label: 'Regio', icon: '🗺️' },
+  ];
+
+  // Categorieën met submenu's
+  const navCategories = [
+    {
+      id: 'richting',
+      label: 'Richting',
+      icon: '🏢',
+      subItems: [
+        { id: 'regio', label: 'Regio', icon: '🗺️' }
+      ]
+    }
   ];
 
   // Add settings menu item for admins
@@ -123,6 +153,65 @@ export const Layout: React.FC<LayoutProps> = ({ children, user, onLogout, curren
               {item.label}
             </button>
           ))}
+
+          {/* Categorieën met submenu's */}
+          {navCategories.map((category) => {
+            const isExpanded = expandedCategories.has(category.id);
+            const hasActiveSubItem = category.subItems.some(subItem => currentView === subItem.id);
+            
+            return (
+              <div key={category.id} className="space-y-1">
+                <button
+                  onClick={() => {
+                    const newExpanded = new Set(expandedCategories);
+                    if (isExpanded) {
+                      newExpanded.delete(category.id);
+                    } else {
+                      newExpanded.add(category.id);
+                    }
+                    setExpandedCategories(newExpanded);
+                  }}
+                  className={`w-full flex items-center justify-between gap-3 px-4 py-3 rounded-lg text-sm font-medium transition-colors ${
+                    hasActiveSubItem
+                      ? 'bg-orange-50 text-richting-orange border-l-4 border-richting-orange'
+                      : 'text-gray-600 hover:bg-gray-50 hover:text-slate-900'
+                  }`}
+                >
+                  <div className="flex items-center gap-3">
+                    <span className="text-lg">{category.icon}</span>
+                    {category.label}
+                  </div>
+                  <svg 
+                    className={`w-4 h-4 transition-transform ${isExpanded ? 'rotate-90' : ''}`}
+                    fill="none" 
+                    viewBox="0 0 24 24" 
+                    stroke="currentColor"
+                  >
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                  </svg>
+                </button>
+                
+                {isExpanded && (
+                  <div className="ml-4 space-y-1">
+                    {category.subItems.map((subItem) => (
+                      <button
+                        key={subItem.id}
+                        onClick={() => onNavigate(subItem.id)}
+                        className={`w-full flex items-center gap-3 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                          currentView === subItem.id
+                            ? 'bg-orange-50 text-richting-orange border-l-4 border-richting-orange'
+                            : 'text-gray-600 hover:bg-gray-50 hover:text-slate-900'
+                        }`}
+                      >
+                        <span className="text-base">{subItem.icon}</span>
+                        {subItem.label}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })}
           
           {/* Admin-only menu items */}
           {adminNavItems.length > 0 && (

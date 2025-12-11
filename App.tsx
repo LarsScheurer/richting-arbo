@@ -4,9 +4,13 @@ import { authService, dbService, customerService, promptService, richtingLocatie
 import { addRiskAssessment, getRisksByCustomer, getRisksByProcess, getRisksByFunction, getRisksBySubstance } from './services/riskService';
 import { Process, Function as FunctionType, Substance, RiskAssessment } from './types/firestore';
 import { doc, updateDoc } from 'firebase/firestore';
-import { db } from './services/firebase';
+import { db, storage } from './services/firebase';
 import { Layout, RichtingLogo } from './components/Layout';
 import { analyzeContent, askQuestion, analyzeOrganisatieBranche, analyzeCultuur } from './services/geminiService';
+import ReactMarkdown from 'react-markdown';
+import { generateOrganisatieProfielPDF } from './utils/pdfGenerator';
+import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { ORGANISATIE_ANALYSE_HOOFDSTUKKEN, ORGANISATIE_ANALYSE_HOOFDSTUKKEN_ARRAY } from './utils/organisatieAnalyseConstants';
 
 // --- ICONS ---
 const EyeIcon = () => <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></svg>;
@@ -39,41 +43,15 @@ const getCategoryLabel = (mainId: string, subId?: string) => {
   return sub?.label || subId;
 };
 
-// Fine & Kinney conversie functies
-// Converteert oude waarden (1-5) naar Fine & Kinney waarden
-const convertKansToFineKinney = (oldValue: number): number => {
-  // Fine & Kinney Kans (W) waarden: 0.5, 1, 3, 6, 10
-  const mapping: Record<number, number> = {
-    1: 0.5,
-    2: 1,
-    3: 3,
-    4: 6,
-    5: 10
-  };
-  // Als waarde al > 5, dan is het al een Fine & Kinney waarde
-  if (oldValue > 5) return oldValue;
-  return mapping[oldValue] || oldValue;
-};
-
-const convertEffectToFineKinney = (oldValue: number): number => {
-  // Fine & Kinney Effect (E) waarden: 1, 3, 7, 15, 40
-  const mapping: Record<number, number> = {
-    1: 1,
-    2: 3,
-    3: 7,
-    4: 15,
-    5: 40
-  };
-  // Als waarde al > 5, dan is het al een Fine & Kinney waarde
-  if (oldValue > 5) return oldValue;
-  return mapping[oldValue] || oldValue;
-};
+// Fine & Kinney is nu de norm - geen conversie meer nodig
+// Fine & Kinney Kans (W) waarden: 0.5, 1, 3, 6, 10
+// Fine & Kinney Effect (E) waarden: 1, 3, 7, 15, 40
 
 const getStatusLabel = (status: string) => {
   switch (status) {
-    case 'active': return 'ACTIEF';
+    case 'active': return 'Actief';
     case 'churned': return 'Gearchiveerd';
-    case 'prospect': return 'PROSPECT';
+    case 'prospect': return 'Prospect';
     case 'rejected': return 'Afgewezen';
     default: return status;
   }
@@ -329,21 +307,6 @@ const KlantreisView = ({
   // Progress tracking for Level 1 (Publiek Organisatie Profiel)
   const [analyseStap, setAnalyseStap] = useState(0);
   const [hoofdstukkenResultaten, setHoofdstukkenResultaten] = useState<{[key: string]: string}>({});
-  const hoofdstukTitels: {[key: string]: string} = {
-    '1': 'Introductie en Branche-identificatie',
-    '2': 'SBI-codes en Bedrijfsinformatie',
-    '3': 'Arbocatalogus en Branche-RI&E',
-    '4': 'Risicocategorieën en Kwantificering',
-    '5': 'Primaire Processen in de Branche',
-    '6': 'Werkzaamheden en Functies',
-    '7': 'Verzuim in de Branche',
-    '8': 'Beroepsziekten in de Branche',
-    '9': 'Gevaarlijke Stoffen en Risico\'s',
-    '10': 'Risicomatrices',
-    '11': 'Vooruitblik en Speerpunten',
-    '12': 'Stappenplan voor een Preventieve Samenwerking',
-    '13': 'Bronvermeldingen'
-  };
   
   // Initialize klantreis if it doesn't exist
   useEffect(() => {
@@ -622,7 +585,7 @@ const KlantreisView = ({
                       {Object.keys(hoofdstukkenResultaten).sort().map(key => (
                         <div key={key} className="bg-white border border-green-200 rounded p-2">
                           <div className="text-xs font-bold text-green-700">
-                            ✅ Hoofdstuk {key}: {hoofdstukTitels[key] || `Hoofdstuk ${key}`}
+                            ✅ Hoofdstuk {key}: {ORGANISATIE_ANALYSE_HOOFDSTUKKEN[key] || `Hoofdstuk ${key}`}
                           </div>
                           <div className="text-[11px] text-gray-600 line-clamp-2">
                             {hoofdstukkenResultaten[key].substring(0, 160)}...
@@ -843,7 +806,8 @@ const CustomerDetailView = ({
               latitude: coordinates.latitude,
               longitude: coordinates.longitude,
               richtingLocatieId: nearest?.id || loc.richtingLocatieId,
-              richtingLocatieNaam: nearest?.naam || loc.richtingLocatieNaam
+              richtingLocatieNaam: nearest?.naam || loc.richtingLocatieNaam,
+              richtingLocatieAfstand: nearest?.distance || loc.richtingLocatieAfstand
             };
              
             await customerService.addLocation(updatedLoc);
@@ -902,6 +866,7 @@ const CustomerDetailView = ({
         if (nearest) {
           newLoc.richtingLocatieId = nearest.id;
           newLoc.richtingLocatieNaam = nearest.naam;
+          newLoc.richtingLocatieAfstand = nearest.distance;
           console.log(`📍 Dichtstbijzijnde Richting locatie: ${nearest.naam} (${nearest.distance.toFixed(1)} km)`);
         }
       } else {
@@ -933,7 +898,8 @@ const CustomerDetailView = ({
       setLocEmployeeCount(undefined);
       
       if (newLoc.richtingLocatieNaam) {
-        alert(`✅ Locatie toegevoegd!\n📍 Dichtstbijzijnde Richting: ${newLoc.richtingLocatieNaam}`);
+        const afstandText = newLoc.richtingLocatieAfstand !== undefined ? ` (${newLoc.richtingLocatieAfstand.toFixed(1)} km)` : '';
+        alert(`✅ Locatie toegevoegd!\n📍 Richtingvestiging: ${newLoc.richtingLocatieNaam}${afstandText}`);
       } else {
         alert('✅ Locatie toegevoegd!\n⚠️ Geen Richting locatie gevonden - controleer handmatig.');
       }
@@ -993,8 +959,15 @@ const CustomerDetailView = ({
   };
 
   const handleChangeStatus = async (newStatus: 'active' | 'prospect' | 'churned' | 'rejected') => {
-    await customerService.updateCustomerStatus(customer.id, newStatus);
-    onUpdate({ ...customer, status: newStatus });
+    try {
+      console.log(`🔄 Changing status for customer ${customer.id} to ${newStatus}`);
+      await customerService.updateCustomerStatus(customer.id, newStatus);
+      console.log(`✅ Status updated successfully`);
+      onUpdate({ ...customer, status: newStatus });
+    } catch (error: any) {
+      console.error('❌ Error updating status:', error);
+      alert(`Fout bij aanpassen status: ${error.message || 'Onbekende fout'}`);
+    }
   };
 
   const handleDelete = async () => {
@@ -1030,16 +1003,37 @@ const CustomerDetailView = ({
       const fullAddress = `${address}, ${city}, Nederland`;
       // Gebruik een gratis geocoding service (Nominatim OpenStreetMap)
       const response = await fetch(
-        `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(fullAddress)}&limit=1`,
+        `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(fullAddress)}&limit=1&countrycodes=nl`,
         {
           headers: {
-            'User-Agent': 'Richting-Kennisbank/1.0' // Vereist door Nominatim
+            'User-Agent': 'Richting-Kennisbank/1.0 (contact@richting.nl)' // Vereist door Nominatim - specifiekere User-Agent
           }
         }
       );
       
       if (!response.ok) {
-        throw new Error('Geocoding service niet beschikbaar');
+        console.warn('Geocoding service response niet OK:', response.status);
+        // Probeer alleen met stad als fallback
+        if (city) {
+          const cityResponse = await fetch(
+            `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(city + ', Nederland')}&limit=1&countrycodes=nl`,
+            {
+              headers: {
+                'User-Agent': 'Richting-Kennisbank/1.0 (contact@richting.nl)'
+              }
+            }
+          );
+          if (cityResponse.ok) {
+            const cityData = await cityResponse.json();
+            if (cityData && cityData.length > 0) {
+              return {
+                latitude: parseFloat(cityData[0].lat),
+                longitude: parseFloat(cityData[0].lon)
+              };
+            }
+          }
+        }
+        return null;
       }
       
       const data = await response.json();
@@ -1049,6 +1043,28 @@ const CustomerDetailView = ({
           longitude: parseFloat(data[0].lon)
         };
       }
+      
+      // Fallback: probeer alleen met stad
+      if (city) {
+        const cityResponse = await fetch(
+          `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(city + ', Nederland')}&limit=1&countrycodes=nl`,
+          {
+            headers: {
+              'User-Agent': 'Richting-Kennisbank/1.0 (contact@richting.nl)'
+            }
+          }
+        );
+        if (cityResponse.ok) {
+          const cityData = await cityResponse.json();
+          if (cityData && cityData.length > 0) {
+            return {
+              latitude: parseFloat(cityData[0].lat),
+              longitude: parseFloat(cityData[0].lon)
+            };
+          }
+        }
+      }
+      
       return null;
     } catch (error) {
       console.error('Geocoding error:', error);
@@ -1153,6 +1169,7 @@ const CustomerDetailView = ({
       if (nearest) {
         newLoc.richtingLocatieId = nearest.id;
         newLoc.richtingLocatieNaam = nearest.naam;
+        newLoc.richtingLocatieAfstand = nearest.distance;
       }
 
       await customerService.addLocation(newLoc);
@@ -1169,6 +1186,61 @@ const CustomerDetailView = ({
   };
 
   const displayLogoUrl = customer.logoUrl || getCompanyLogoUrl(customer.website);
+
+  // Functie om PDF te genereren en toe te voegen aan Klantdossier
+  const handleGeneratePDF = async () => {
+    if (!organisatieProfiel) return;
+    
+    try {
+      // Toon loading state
+      const loadingAlert = alert('PDF wordt gegenereerd...');
+      
+      // Genereer PDF
+      const pdfBlob = await generateOrganisatieProfielPDF(
+        organisatieProfiel.organisatieNaam || customer.name,
+        organisatieProfiel.analyseDatum,
+        hoofdstukkenResultaten,
+        organisatieProfiel.volledigRapport
+      );
+
+      // Upload naar Firebase Storage
+      const fileName = `organisatie-profiel-${customer.id}-${Date.now()}.pdf`;
+      const storageRef = ref(storage, `documents/${customer.id}/${fileName}`);
+      await uploadBytes(storageRef, pdfBlob);
+      const downloadURL = await getDownloadURL(storageRef);
+
+      // Maak document aan in Firestore
+      const documentId = `doc_${Date.now()}`;
+      const documentData: DocumentSource = {
+        id: documentId,
+        title: `Publiek Organisatie Profiel - ${organisatieProfiel.organisatieNaam || customer.name}`,
+        content: organisatieProfiel.volledigRapport || Object.values(hoofdstukkenResultaten).join('\n\n'),
+        originalUrl: downloadURL,
+        type: DocType.PDF,
+        uploadedBy: user.id,
+        uploadedAt: new Date().toISOString(),
+        customerId: customer.id,
+        summary: `Publiek Organisatie Profiel analyse voor ${organisatieProfiel.organisatieNaam || customer.name}`,
+        mainCategoryId: 'strategy',
+        subCategoryId: 'management',
+        tags: ['organisatie-profiel', 'analyse', 'publiek'],
+        viewedBy: [],
+        likedBy: [],
+        isArchived: false
+      };
+
+      await dbService.addDocument(documentData);
+
+      // Refresh documenten
+      const refreshedDocs = await dbService.getDocumentsForCustomer(customer.id);
+      setDocs(refreshedDocs);
+
+      alert(`✅ PDF succesvol toegevoegd aan Klantdossier!\n\nBestand: ${fileName}`);
+    } catch (error: any) {
+      console.error('Error generating PDF:', error);
+      alert(`❌ Fout bij genereren PDF: ${error.message || 'Onbekende fout'}`);
+    }
+  };
 
   const getDocIcon = (type: DocType) => {
       switch(type) {
@@ -1228,12 +1300,15 @@ const CustomerDetailView = ({
             <div className="flex items-center gap-4">
                 <div className="flex flex-col gap-2 items-end">
                     <select 
-                        value={customer.status}
-                        onChange={(e) => handleChangeStatus(e.target.value as any)}
-                        className="text-xs border border-gray-300 rounded px-2 py-1 bg-white text-gray-600 focus:ring-richting-orange"
+                        value={customer.status || 'active'}
+                        onChange={(e) => {
+                          const newStatus = e.target.value as 'active' | 'prospect' | 'churned' | 'rejected';
+                          handleChangeStatus(newStatus);
+                        }}
+                        className="text-xs border border-gray-300 rounded px-2 py-1 bg-white text-gray-600 focus:ring-richting-orange focus:border-richting-orange cursor-pointer"
                     >
-                        <option value="prospect">Prospect</option>
                         <option value="active">Actief</option>
+                        <option value="prospect">Prospect</option>
                         <option value="churned">Archief</option>
                         <option value="rejected">Afgewezen</option>
                     </select>
@@ -1320,13 +1395,11 @@ const CustomerDetailView = ({
                           )}
                           {loc.richtingLocatieNaam && (
                             <div className="mt-2 flex items-center gap-1">
-                              <span className="text-xs text-richting-orange font-medium">📍 Dichtstbijzijnde Richting:</span>
+                              <span className="text-xs text-richting-orange font-medium">📍 Richtingvestiging:</span>
                               <span className="text-xs text-slate-700 font-semibold">{loc.richtingLocatieNaam}</span>
-                            </div>
-                          )}
-                          {loc.latitude && loc.longitude && (
-                            <div className="mt-1 flex items-center gap-1">
-                              <span className="text-xs text-gray-400">🌐 GPS: {loc.latitude.toFixed(4)}, {loc.longitude.toFixed(4)}</span>
+                              {loc.richtingLocatieAfstand !== undefined && (
+                                <span className="text-xs text-gray-500">({loc.richtingLocatieAfstand.toFixed(1)} km)</span>
+                              )}
                             </div>
                           )}
                        </div>
@@ -1680,22 +1753,7 @@ const CustomerDetailView = ({
                          } else {
                            // Combine all hoofdstukken
                            const combined = Object.keys(nieuweResultaten).sort().map(key => {
-                             const hoofdstukTitels: {[key: string]: string} = {
-                               '1': 'Introductie en Branche-identificatie',
-                               '2': 'SBI-codes en Bedrijfsinformatie',
-                               '3': 'Arbocatalogus en Branche-RI&E',
-                               '4': 'Risicocategorieën en Kwantificering',
-                               '5': 'Primaire Processen in de Branche',
-                               '6': 'Werkzaamheden en Functies',
-                               '7': 'Verzuim in de Branche',
-                               '8': 'Beroepsziekten in de Branche',
-                               '9': 'Gevaarlijke Stoffen en Risico\'s',
-                               '10': 'Risicomatrices',
-                               '11': 'Vooruitblik en Speerpunten',
-                               '12': 'Stappenplan voor een Preventieve Samenwerking',
-                               '13': 'Bronvermeldingen'
-                             };
-                             return `## Hoofdstuk ${key}: ${hoofdstukTitels[key] || `Hoofdstuk ${key}`}\n\n${nieuweResultaten[key]}\n\n`;
+                             return `## Hoofdstuk ${key}: ${ORGANISATIE_ANALYSE_HOOFDSTUKKEN[key] || `Hoofdstuk ${key}`}\n\n${nieuweResultaten[key]}\n\n`;
                            }).join('');
                            setOrganisatieAnalyseResultaat(combined);
                          }
@@ -1910,21 +1968,7 @@ const CustomerDetailView = ({
                <span className="animate-spin">⏳</span> Analyse in uitvoering...
              </h4>
              <div className="space-y-3">
-               {[
-                 "Inleiding en Branche-identificatie",
-                 "SBI-codes en Bedrijfsinformatie",
-                 "Arbocatalogus en Branche-RI&E",
-                 "Risicocategorieën en Kwantificering",
-                 "Primaire Processen in de Branche",
-                 "Werkzaamheden en Functies",
-                 "Verzuim in de Branche",
-                 "Beroepsziekten in de Branche",
-                 "Gevaarlijke Stoffen en Risico's",
-                 "Risicomatrices",
-                 "Vooruitblik en Speerpunten",
-                 "Stappenplan voor een Preventieve Samenwerking",
-                 "Bronvermeldingen"
-               ].map((stap, index) => {
+               {ORGANISATIE_ANALYSE_HOOFDSTUKKEN_ARRAY.map((stap, index) => {
                  const stapNummer = index + 1;
                  const isVoltooid = analyseStap > stapNummer;
                  const isHuidige = analyseStap === stapNummer;
@@ -1982,25 +2026,10 @@ const CustomerDetailView = ({
                  <h5 className="text-sm font-bold text-slate-900 mb-3">Tussentijds Resultaten:</h5>
                  <div className="space-y-3 max-h-96 overflow-y-auto">
                    {Object.keys(hoofdstukkenResultaten).sort().map(key => {
-                     const hoofdstukTitels: {[key: string]: string} = {
-                       '1': 'Introductie en Branche-identificatie',
-                       '2': 'SBI-codes en Bedrijfsinformatie',
-                       '3': 'Arbocatalogus en Branche-RI&E',
-                       '4': 'Risicocategorieën en Kwantificering',
-                       '5': 'Primaire Processen in de Branche',
-                       '6': 'Werkzaamheden en Functies',
-                       '7': 'Verzuim in de Branche',
-                       '8': 'Beroepsziekten in de Branche',
-                       '9': 'Gevaarlijke Stoffen en Risico\'s',
-                       '10': 'Risicomatrices',
-                       '11': 'Vooruitblik en Speerpunten',
-                       '12': 'Stappenplan voor een Preventieve Samenwerking',
-                       '13': 'Bronvermeldingen'
-                     };
                      return (
                        <div key={key} className="bg-green-50 border border-green-200 rounded p-3">
                          <h6 className="text-xs font-bold text-green-700 mb-1">
-                           ✅ Hoofdstuk {key}: {hoofdstukTitels[key] || `Hoofdstuk ${key}`}
+                           ✅ Hoofdstuk {key}: {ORGANISATIE_ANALYSE_HOOFDSTUKKEN[key] || `Hoofdstuk ${key}`}
                          </h6>
                          <p className="text-xs text-gray-600 line-clamp-3">
                            {hoofdstukkenResultaten[key].substring(0, 200)}...
@@ -2014,13 +2043,44 @@ const CustomerDetailView = ({
            </div>
          )}
 
-         {/* Analyse Resultaten */}
+         {/* Analyse Resultaten - Verbeterde Layout */}
          {organisatieAnalyseResultaat && (
-           <div className="bg-orange-50 border border-orange-200 rounded-lg p-4 mb-4">
-             <h4 className="font-bold text-richting-orange mb-2 flex items-center gap-2">📊 Publiek Organisatie Profiel Resultaat</h4>
-             <div className="text-sm text-gray-700 whitespace-pre-wrap max-h-96 overflow-y-auto">
-               {organisatieAnalyseResultaat}
+           <div className="bg-white border border-orange-200 rounded-xl shadow-lg p-6 mb-4">
+             <div className="flex items-center justify-between mb-4">
+               <h4 className="font-bold text-richting-orange text-xl flex items-center gap-2">📊 Publiek Organisatie Profiel Resultaat</h4>
+               {organisatieProfiel && (
+                 <button
+                   onClick={handleGeneratePDF}
+                   className="px-4 py-2 bg-richting-orange text-white rounded-lg text-sm font-medium hover:bg-orange-600 transition-colors flex items-center gap-2"
+                 >
+                   📄 PDF Toevoegen aan Dossier
+                 </button>
+               )}
              </div>
+             
+             {/* Per Hoofdstuk Weergave */}
+             {Object.keys(hoofdstukkenResultaten).length > 0 ? (
+               <div className="space-y-6">
+                 {Object.keys(hoofdstukkenResultaten).sort((a, b) => parseInt(a) - parseInt(b)).map((key) => {
+                   return (
+                     <div key={key} className="bg-gradient-to-br from-gray-50 to-white rounded-lg p-6 border border-gray-200 shadow-sm">
+                       <h5 className="text-xl font-bold text-richting-orange mb-4 pb-2 border-b-2 border-richting-orange">
+                         Hoofdstuk {key}: {ORGANISATIE_ANALYSE_HOOFDSTUKKEN[key] || `Hoofdstuk ${key}`}
+                       </h5>
+                       <div className="prose prose-lg max-w-none prose-headings:text-slate-900 prose-headings:font-bold prose-p:text-gray-700 prose-p:leading-relaxed prose-strong:text-slate-900 prose-ul:text-gray-700 prose-ol:text-gray-700 prose-li:my-2 prose-table:w-full prose-th:bg-gray-100 prose-th:font-bold prose-th:p-3 prose-td:p-3 prose-a:text-richting-orange prose-a:no-underline hover:prose-a:underline">
+                         <ReactMarkdown>{hoofdstukkenResultaten[key]}</ReactMarkdown>
+                       </div>
+                     </div>
+                   );
+                 })}
+               </div>
+             ) : (
+               <div className="bg-gradient-to-br from-gray-50 to-white rounded-lg p-6 border-2 border-gray-200">
+                 <div className="prose prose-lg max-w-none prose-headings:text-slate-900 prose-headings:font-bold prose-p:text-gray-700 prose-p:leading-relaxed prose-strong:text-slate-900 prose-ul:text-gray-700 prose-ol:text-gray-700 prose-li:my-2 prose-table:w-full prose-th:bg-gray-100 prose-th:font-bold prose-th:p-3 prose-td:p-3 prose-a:text-richting-orange prose-a:no-underline hover:prose-a:underline">
+                   <ReactMarkdown>{organisatieAnalyseResultaat}</ReactMarkdown>
+                 </div>
+               </div>
+             )}
            </div>
          )}
 
@@ -2270,8 +2330,9 @@ const CustomerDetailView = ({
                    const risicosInCat = organisatieProfiel.risicos.filter(r => r.categorie === cat);
                    const gemiddeldeRisico = risicosInCat.length > 0
                      ? risicosInCat.reduce((sum, r) => {
-                         const kans = convertKansToFineKinney(r.kans);
-                         const effect = convertEffectToFineKinney(r.effect);
+                         // Direct Fine & Kinney waarden gebruiken (geen conversie meer)
+                         const kans = r.kans;
+                         const effect = r.effect;
                          return sum + (kans * effect);
                        }, 0) / risicosInCat.length
                      : 0;
@@ -2293,8 +2354,9 @@ const CustomerDetailView = ({
                <div className="space-y-2 max-h-64 overflow-y-auto">
                  {organisatieProfiel.risicos
                    .map(risico => {
-                     const kans = convertKansToFineKinney(risico.kans);
-                     const effect = convertEffectToFineKinney(risico.effect);
+                     // Direct Fine & Kinney waarden gebruiken (geen conversie meer)
+                     const kans = risico.kans;
+                     const effect = risico.effect;
                      const risicogetal = kans * effect;
                      const prioriteitNiveau = risicogetal >= 400 ? 1 : risicogetal >= 200 ? 2 : risicogetal >= 100 ? 3 : risicogetal >= 50 ? 4 : 5;
                      return { risico, kans, effect, risicogetal, prioriteitNiveau };
@@ -2351,8 +2413,9 @@ const CustomerDetailView = ({
                         const risico = item.risico || (organisatieProfiel.risicos || []).find(r => r.id === item.risicoId);
                         if (!risico) return null;
                         const blootstelling = item.blootstelling || 3;
-                        const kans = convertKansToFineKinney(risico.kans);
-                        const effect = convertEffectToFineKinney(risico.effect);
+                        // Direct Fine & Kinney waarden gebruiken (geen conversie meer)
+                        const kans = risico.kans;
+                        const effect = risico.effect;
                         const risicogetal = blootstelling * kans * effect;
                         return { risico, blootstelling, kans, effect, risicogetal };
                       }).filter(Boolean);
@@ -2413,8 +2476,9 @@ const CustomerDetailView = ({
                         const risico = item.risico || (organisatieProfiel.risicos || []).find(r => r.id === item.risicoId);
                         if (!risico) return null;
                         const blootstelling = item.blootstelling || 3;
-                        const kans = convertKansToFineKinney(risico.kans);
-                        const effect = convertEffectToFineKinney(risico.effect);
+                        // Direct Fine & Kinney waarden gebruiken (geen conversie meer)
+                        const kans = risico.kans;
+                        const effect = risico.effect;
                         const risicogetal = blootstelling * kans * effect;
                         return { risico, blootstelling, kans, effect, risicogetal };
                       }).filter(Boolean);
@@ -2494,81 +2558,58 @@ const CustomerDetailView = ({
              </div>
            </div>
 
-           {/* Volledig Rapport */}
+           {/* Volledig Rapport - Verbeterde Layout met Markdown */}
            {organisatieProfiel.volledigRapport && (
              <div className="bg-white rounded-xl shadow-lg border border-gray-200 p-8 mb-6">
                <div className="flex items-center justify-between mb-6">
                  <h4 className="text-2xl font-bold text-slate-900 flex items-center gap-3">
                    <span className="text-3xl">📄</span> Volledig Rapport
                  </h4>
-                 <button
-                   onClick={() => {
-                     const printWindow = window.open('', '_blank');
-                     if (printWindow) {
-                       printWindow.document.write(`
-                         <!DOCTYPE html>
-                         <html>
-                           <head>
-                             <title>Organisatie Profiel - ${organisatieProfiel.organisatieNaam || customer.name}</title>
-                             <style>
-                               body { font-family: 'Inter', sans-serif; padding: 40px; line-height: 1.6; color: #1a202c; }
-                               h1 { color: #F36F21; border-bottom: 3px solid #F36F21; padding-bottom: 10px; }
-                               h2 { color: #2d3748; margin-top: 30px; border-bottom: 2px solid #e2e8f0; padding-bottom: 8px; }
-                               h3 { color: #4a5568; margin-top: 20px; }
-                               table { border-collapse: collapse; width: 100%; margin: 20px 0; }
-                               th, td { border: 1px solid #e2e8f0; padding: 12px; text-align: left; }
-                               th { background-color: #f7fafc; font-weight: bold; }
-                               .badge { display: inline-block; padding: 4px 8px; border-radius: 4px; font-size: 12px; font-weight: bold; }
-                             </style>
-                           </head>
-                           <body>
-                             ${organisatieProfiel.volledigRapport.replace(/\n/g, '<br>')}
-                           </body>
-                         </html>
-                       `);
-                       printWindow.document.close();
-                       setTimeout(() => printWindow.print(), 250);
-                     }
-                   }}
-                   className="px-4 py-2 bg-richting-orange text-white rounded-lg text-sm font-medium hover:bg-orange-600 transition-colors flex items-center gap-2"
-                 >
-                   🖨️ Print / Export
-                 </button>
+                 <div className="flex gap-2">
+                   <button
+                     onClick={handleGeneratePDF}
+                     className="px-4 py-2 bg-richting-orange text-white rounded-lg text-sm font-medium hover:bg-orange-600 transition-colors flex items-center gap-2"
+                   >
+                     📄 PDF Toevoegen aan Dossier
+                   </button>
+                   <button
+                     onClick={() => {
+                       const printWindow = window.open('', '_blank');
+                       if (printWindow) {
+                         printWindow.document.write(`
+                           <!DOCTYPE html>
+                           <html>
+                             <head>
+                               <title>Organisatie Profiel - ${organisatieProfiel.organisatieNaam || customer.name}</title>
+                               <style>
+                                 body { font-family: 'Inter', sans-serif; padding: 40px; line-height: 1.6; color: #1a202c; }
+                                 h1 { color: #F36F21; border-bottom: 3px solid #F36F21; padding-bottom: 10px; }
+                                 h2 { color: #2d3748; margin-top: 30px; border-bottom: 2px solid #e2e8f0; padding-bottom: 8px; }
+                                 h3 { color: #4a5568; margin-top: 20px; }
+                                 table { border-collapse: collapse; width: 100%; margin: 20px 0; }
+                                 th, td { border: 1px solid #e2e8f0; padding: 12px; text-align: left; }
+                                 th { background-color: #f7fafc; font-weight: bold; }
+                                 .badge { display: inline-block; padding: 4px 8px; border-radius: 4px; font-size: 12px; font-weight: bold; }
+                               </style>
+                             </head>
+                             <body>
+                               ${organisatieProfiel.volledigRapport.replace(/\n/g, '<br>')}
+                             </body>
+                           </html>
+                         `);
+                         printWindow.document.close();
+                         setTimeout(() => printWindow.print(), 250);
+                       }
+                     }}
+                     className="px-4 py-2 bg-gray-600 text-white rounded-lg text-sm font-medium hover:bg-gray-700 transition-colors flex items-center gap-2"
+                   >
+                     🖨️ Print / Export
+                   </button>
+                 </div>
                </div>
                <div className="bg-gradient-to-br from-gray-50 to-white rounded-lg p-8 border-2 border-gray-200 shadow-inner">
                  <div className="prose prose-lg max-w-none prose-headings:text-slate-900 prose-headings:font-bold prose-p:text-gray-700 prose-p:leading-relaxed prose-strong:text-slate-900 prose-ul:text-gray-700 prose-ol:text-gray-700 prose-li:my-2 prose-table:w-full prose-th:bg-gray-100 prose-th:font-bold prose-th:p-3 prose-td:p-3 prose-a:text-richting-orange prose-a:no-underline hover:prose-a:underline">
-                   <div className="text-base text-gray-800 leading-relaxed whitespace-pre-wrap font-sans">
-                     {organisatieProfiel.volledigRapport.split('\n').map((line, idx) => {
-                       // Render headers
-                       if (line.startsWith('# ')) {
-                         return <h1 key={idx} className="text-3xl font-bold text-richting-orange mt-8 mb-4 pb-3 border-b-2 border-richting-orange">{line.substring(2)}</h1>;
-                       }
-                       if (line.startsWith('## ')) {
-                         return <h2 key={idx} className="text-2xl font-bold text-slate-800 mt-6 mb-3 pb-2 border-b border-gray-300">{line.substring(3)}</h2>;
-                       }
-                       if (line.startsWith('### ')) {
-                         return <h3 key={idx} className="text-xl font-bold text-slate-700 mt-4 mb-2">{line.substring(4)}</h3>;
-                       }
-                       // Render tables (basic)
-                       if (line.includes('|') && line.trim().startsWith('|')) {
-                         return <div key={idx} className="my-2 font-mono text-sm bg-gray-100 p-2 rounded border-l-4 border-richting-orange">{line}</div>;
-                       }
-                       // Render lists
-                       if (line.trim().startsWith('- ') || line.trim().startsWith('* ')) {
-                         return <li key={idx} className="ml-4 my-1">{line.substring(line.indexOf('- ') + 2 || line.indexOf('* ') + 2)}</li>;
-                       }
-                       // Render bold text
-                       if (line.includes('**')) {
-                         const parts = line.split('**');
-                         return <p key={idx} className="my-3">{parts.map((part, i) => i % 2 === 1 ? <strong key={i} className="font-bold text-slate-900">{part}</strong> : part)}</p>;
-                       }
-                       // Regular paragraph
-                       if (line.trim()) {
-                         return <p key={idx} className="my-3 leading-relaxed">{line}</p>;
-                       }
-                       return <br key={idx} />;
-                     })}
-                   </div>
+                   <ReactMarkdown>{organisatieProfiel.volledigRapport}</ReactMarkdown>
                  </div>
                </div>
              </div>
@@ -2621,8 +2662,9 @@ const CustomerDetailView = ({
                                  const risico = item.risico || organisatieProfiel.risicos.find(r => r.id === item.risicoId);
                                  if (!risico) return null;
                                  const blootstelling = item.blootstelling || 3;
-                                 const kans = convertKansToFineKinney(risico.kans);
-                                 const effect = convertEffectToFineKinney(risico.effect);
+                                 // Direct Fine & Kinney waarden gebruiken (geen conversie meer)
+                                 const kans = risico.kans;
+                                 const effect = risico.effect;
                                  const risicogetal = blootstelling * kans * effect;
                                  const prioriteitNiveau = risicogetal >= 400 ? 1 : risicogetal >= 200 ? 2 : risicogetal >= 100 ? 3 : risicogetal >= 50 ? 4 : 5;
                                  return { item, risico, blootstelling, kans, effect, risicogetal, prioriteitNiveau, idx };
@@ -2670,8 +2712,9 @@ const CustomerDetailView = ({
                                      const risico = item.risico || organisatieProfiel.risicos.find(r => r.id === item.risicoId);
                                      if (!risico) return 0;
                                      const blootstelling = item.blootstelling || 3;
-                                     const kans = convertKansToFineKinney(risico.kans);
-                                     const effect = convertEffectToFineKinney(risico.effect);
+                                     // Direct Fine & Kinney waarden gebruiken (geen conversie meer)
+                                     const kans = risico.kans;
+                                     const effect = risico.effect;
                                      return blootstelling * kans * effect;
                                    })
                                    .reduce((sum, val) => sum + val, 0) || 0}
@@ -2734,8 +2777,9 @@ const CustomerDetailView = ({
                                 const risico = item.risico || organisatieProfiel.risicos.find(r => r.id === item.risicoId);
                                 if (!risico) return null;
                                 const blootstelling = item.blootstelling || 3;
-                                const kans = convertKansToFineKinney(risico.kans);
-                                const effect = convertEffectToFineKinney(risico.effect);
+                                // Direct Fine & Kinney waarden gebruiken (geen conversie meer)
+                                const kans = risico.kans;
+                                const effect = risico.effect;
                                 const score = blootstelling * kans * effect;
                                 return {
                                   key: risico.id || idx,
@@ -3963,56 +4007,82 @@ const RegioView = ({ user }: { user: User }) => {
     return grouped;
   }, [allLocations, richtingLocaties, customers]);
 
-  // Bereken medewerkers per regio (gebruik locatie-specifieke aantallen)
+  // Bereken medewerkers per regio (tel elke klant maar EEN KEER per regio)
   const medewerkersPerRegio = useMemo(() => {
     const totals: Record<string, number> = {};
     Object.keys(klantenPerRegio).forEach(regio => {
-      const total = klantenPerRegio[regio].reduce((sum, item) => {
-        // Gebruik locatie-specifiek aantal als beschikbaar
-        if (item.location.employeeCount !== undefined && item.location.employeeCount !== null) {
-          return sum + item.location.employeeCount;
-        }
-        // Als locatie geen aantal heeft, gebruik klant totaal (maar alleen één keer per klant per regio)
-        // Om dubbele telling te voorkomen, tellen we alleen de eerste locatie van een klant in een regio
-        const isFirstLocationForCustomer = klantenPerRegio[regio].findIndex(
-          i => i.customer.id === item.customer.id && i.location.id === item.location.id
-        ) === klantenPerRegio[regio].findIndex(i => i.customer.id === item.customer.id);
+      const processedCustomers = new Set<string>();
+      let total = 0;
+      
+      klantenPerRegio[regio].forEach(item => {
+        // Tel elke klant maar EEN KEER per regio
+        if (processedCustomers.has(item.customer.id)) return;
+        processedCustomers.add(item.customer.id);
         
-        if (isFirstLocationForCustomer) {
-          return sum + (item.customer.employeeCount || 0);
+        // Zoek alle locaties van deze klant in deze regio
+        const customerLocationsInRegio = klantenPerRegio[regio].filter(
+          i => i.customer.id === item.customer.id
+        );
+        const locationsWithCount = customerLocationsInRegio.filter(
+          i => i.location.employeeCount !== undefined && i.location.employeeCount !== null
+        );
+        
+        if (locationsWithCount.length > 0) {
+          // Klant heeft locaties met aantallen in deze regio: gebruik customer.employeeCount (prioriteit)
+          // OF gebruik MAX van locatie-aantallen als customer.employeeCount niet beschikbaar is
+          if (item.customer.employeeCount) {
+            total += item.customer.employeeCount;
+          } else {
+            const maxLocationCount = Math.max(...locationsWithCount.map(i => i.location.employeeCount || 0));
+            total += maxLocationCount;
+          }
+        } else {
+          // Klant heeft geen locaties met aantallen in deze regio: gebruik customer.employeeCount
+          total += item.customer.employeeCount || 0;
         }
-        return sum;
-      }, 0);
+      });
+      
       totals[regio] = total;
     });
     return totals;
   }, [klantenPerRegio]);
 
-  // Bereken medewerkers per vestiging (gebruik locatie-specifieke aantallen)
+  // Bereken medewerkers per vestiging (tel elke klant maar EEN KEER per vestiging)
   const medewerkersPerVestiging = useMemo(() => {
     if (!selectedRegio) return {};
     const totals: Record<string, number> = {};
+    const processedCustomersPerVestiging: Record<string, Set<string>> = {};
+    
     klantenPerRegio[selectedRegio]?.forEach(item => {
       if (!totals[item.vestiging]) {
         totals[item.vestiging] = 0;
+        processedCustomersPerVestiging[item.vestiging] = new Set();
       }
       
-      // Gebruik locatie-specifiek aantal als beschikbaar
-      if (item.location.employeeCount !== undefined && item.location.employeeCount !== null) {
-        totals[item.vestiging] += item.location.employeeCount;
-      } else {
-        // Als locatie geen aantal heeft, gebruik klant totaal (maar alleen één keer per klant per vestiging)
-        const isFirstLocationForCustomer = klantenPerRegio[selectedRegio]?.findIndex(
-          i => i.customer.id === item.customer.id && 
-               i.vestiging === item.vestiging && 
-               i.location.id === item.location.id
-        ) === klantenPerRegio[selectedRegio]?.findIndex(
-          i => i.customer.id === item.customer.id && i.vestiging === item.vestiging
-        );
-        
-        if (isFirstLocationForCustomer) {
-          totals[item.vestiging] += (item.customer.employeeCount || 0);
+      // Tel elke klant maar EEN KEER per vestiging
+      if (processedCustomersPerVestiging[item.vestiging].has(item.customer.id)) return;
+      processedCustomersPerVestiging[item.vestiging].add(item.customer.id);
+      
+      // Zoek alle locaties van deze klant bij deze vestiging
+      const customerLocationsAtVestiging = klantenPerRegio[selectedRegio]?.filter(
+        i => i.customer.id === item.customer.id && i.vestiging === item.vestiging
+      ) || [];
+      const locationsWithCount = customerLocationsAtVestiging.filter(
+        i => i.location.employeeCount !== undefined && i.location.employeeCount !== null
+      );
+      
+      if (locationsWithCount.length > 0) {
+        // Klant heeft locaties met aantallen bij deze vestiging: gebruik customer.employeeCount (prioriteit)
+        // OF gebruik MAX van locatie-aantallen als customer.employeeCount niet beschikbaar is
+        if (item.customer.employeeCount) {
+          totals[item.vestiging] += item.customer.employeeCount;
+        } else {
+          const maxLocationCount = Math.max(...locationsWithCount.map(i => i.location.employeeCount || 0));
+          totals[item.vestiging] += maxLocationCount;
         }
+      } else {
+        // Klant heeft geen locaties met aantallen bij deze vestiging: gebruik customer.employeeCount
+        totals[item.vestiging] += item.customer.employeeCount || 0;
       }
     });
     return totals;
@@ -4239,27 +4309,39 @@ const RegioView = ({ user }: { user: User }) => {
               <p className="text-xs text-gray-600 mb-1">Totaal Medewerkers</p>
               <p className="text-3xl font-bold text-slate-900">
                 {(() => {
-                  // Bereken totaal op basis van locatie-specifieke aantallen waar beschikbaar
-                  const totalFromLocations = allLocations.reduce((sum, loc) => {
-                    if (loc.employeeCount !== undefined && loc.employeeCount !== null) {
-                      return sum + loc.employeeCount;
-                    }
-                    return sum;
-                  }, 0);
+                  // Bereken totaal: tel elke klant maar EEN KEER
+                  // Als een klant locaties heeft met employeeCount, gebruik de MAX (omdat locatie-aantallen mogelijk het totaal zijn)
+                  // Als een klant geen locaties heeft met employeeCount, gebruik customer.employeeCount
+                  const processedCustomers = new Set<string>();
+                  let total = 0;
                   
-                  // Voeg klanten toe die geen locaties met aantallen hebben
-                  const customersWithoutLocationCounts = customers.filter(c => {
-                    const hasLocationWithCount = allLocations.some(
-                      loc => loc.customerId === c.id && loc.employeeCount !== undefined && loc.employeeCount !== null
+                  customers.forEach(customer => {
+                    if (processedCustomers.has(customer.id)) return;
+                    processedCustomers.add(customer.id);
+                    
+                    // Zoek alle locaties voor deze klant
+                    const customerLocations = allLocations.filter(loc => loc.customerId === customer.id);
+                    const locationsWithCount = customerLocations.filter(
+                      loc => loc.employeeCount !== undefined && loc.employeeCount !== null
                     );
-                    return !hasLocationWithCount;
+                    
+                    if (locationsWithCount.length > 0) {
+                      // Klant heeft locaties met aantallen: gebruik MAX (omdat locatie-aantallen mogelijk het totaal zijn, niet per locatie)
+                      // OF gebruik customer.employeeCount als die beschikbaar is (prioriteit)
+                      if (customer.employeeCount) {
+                        total += customer.employeeCount;
+                      } else {
+                        // Als customer.employeeCount niet beschikbaar is, gebruik MAX van locatie-aantallen
+                        const maxLocationCount = Math.max(...locationsWithCount.map(loc => loc.employeeCount || 0));
+                        total += maxLocationCount;
+                      }
+                    } else {
+                      // Klant heeft geen locaties met aantallen: gebruik customer.employeeCount
+                      total += customer.employeeCount || 0;
+                    }
                   });
                   
-                  const totalFromCustomers = customersWithoutLocationCounts.reduce(
-                    (sum, c) => sum + (c.employeeCount || 0), 0
-                  );
-                  
-                  return (totalFromLocations + totalFromCustomers).toLocaleString('nl-NL');
+                  return total.toLocaleString('nl-NL');
                 })()}
               </p>
               <p className="text-xs text-gray-500 mt-1">Gebaseerd op locatie-specifieke aantallen</p>
@@ -4626,13 +4708,14 @@ const SettingsView = ({ user }: { user: User }) => {
 
       // Parse CSV header
       const headers = lines[0].split(',').map(h => h.trim().toLowerCase());
-      const nameIdx = headers.findIndex(h => h === 'name' || h === 'naam');
+      const nameIdx = headers.findIndex(h => h === 'name' || h === 'naam' || h === 'klant');
       const industryIdx = headers.findIndex(h => h === 'industry' || h === 'branche');
       const websiteIdx = headers.findIndex(h => h === 'website');
       const statusIdx = headers.findIndex(h => h === 'status');
+      const employeeCountIdx = headers.findIndex(h => h === 'employeecount' || h === 'aantal_medewerkers' || h === 'aantal medewerkers');
 
       if (nameIdx === -1) {
-        alert('CSV moet minimaal een "name" kolom bevatten');
+        alert('CSV moet minimaal een "name", "naam" of "klant" kolom bevatten');
         return;
       }
 
@@ -4645,11 +4728,38 @@ const SettingsView = ({ user }: { user: User }) => {
         const name = values[nameIdx];
         if (!name) continue;
 
+        // Parse employeeCount als getal
+        let employeeCount: number | undefined = undefined;
+        if (employeeCountIdx >= 0 && values[employeeCountIdx]) {
+          const parsed = parseInt(values[employeeCountIdx], 10);
+          if (!isNaN(parsed)) {
+            employeeCount = parsed;
+          }
+        }
+
+        // Parse status - normaliseer naar geldige waarden
+        let status: Customer['status'] = 'active';
+        if (statusIdx >= 0 && values[statusIdx]) {
+          const statusValue = values[statusIdx].toLowerCase().trim();
+          if (['active', 'actief'].includes(statusValue)) {
+            status = 'active';
+          } else if (['prospect'].includes(statusValue)) {
+            status = 'prospect';
+          } else if (['churned', 'archief'].includes(statusValue)) {
+            status = 'churned';
+          } else if (['rejected', 'afgewezen'].includes(statusValue)) {
+            status = 'rejected';
+          } else {
+            status = 'active'; // Default naar active
+          }
+        }
+
         customers.push({
           name,
           industry: industryIdx >= 0 ? values[industryIdx] : undefined,
           website: websiteIdx >= 0 ? values[websiteIdx] : undefined,
-          status: (statusIdx >= 0 && values[statusIdx]) ? values[statusIdx] as Customer['status'] : 'active',
+          status: status,
+          employeeCount: employeeCount,
           assignedUserIds: [],
           createdAt: new Date().toISOString()
         });
@@ -4687,12 +4797,13 @@ const SettingsView = ({ user }: { user: User }) => {
     try {
       const customers = await customerService.getAllCustomers();
       const csv = [
-        ['name', 'industry', 'website', 'status'].join(','),
+        ['name', 'industry', 'website', 'status', 'Aantal_medewerkers'].join(','),
         ...customers.map(c => [
           c.name,
           c.industry,
           c.website || '',
-          c.status
+          c.status,
+          c.employeeCount || ''
         ].map(v => `"${v}"`).join(','))
       ].join('\n');
 
@@ -5799,10 +5910,11 @@ const SettingsView = ({ user }: { user: User }) => {
                 <div className="text-sm text-gray-600">
                   <p className="font-bold mb-2">Verwachte CSV kolommen:</p>
                   <ul className="list-disc list-inside space-y-1">
-                    <li><code>name</code> - Klantnaam (verplicht)</li>
-                    <li><code>industry</code> - Branche (optioneel)</li>
+                    <li><code>name</code> of <code>naam</code> of <code>klant</code> - Klantnaam (verplicht)</li>
+                    <li><code>industry</code> of <code>branche</code> - Branche (optioneel)</li>
                     <li><code>website</code> - Website URL (optioneel)</li>
                     <li><code>status</code> - Status: active, prospect, churned, rejected (optioneel, default: active)</li>
+                    <li><code>Aantal_medewerkers</code> of <code>employeeCount</code> - Aantal medewerkers (optioneel, numeriek)</li>
                   </ul>
                 </div>
               </div>
@@ -6025,7 +6137,7 @@ const SettingsView = ({ user }: { user: User }) => {
                             <td className="px-3 py-2">{customer.name}</td>
                             <td className="px-3 py-2">{customer.industry}</td>
                             <td className="px-3 py-2">{customer.website || '-'}</td>
-                            <td className="px-3 py-2">{customer.status || 'prospect'}</td>
+                            <td className="px-3 py-2">{getStatusLabel(customer.status || 'prospect')}</td>
                           </tr>
                         ))}
                       </tbody>

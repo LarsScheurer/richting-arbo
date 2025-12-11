@@ -1,0 +1,72 @@
+# Richting Kennisbank - Cursor Rules
+
+## Firebase & GCP Project Context
+
+### Tech Stack
+- **Frontend:** React 19 + Vite, Tailwind CSS
+- **Backend:** Firebase Cloud Functions (2nd Gen), Node.js 20
+- **Database:** Firestore (Modular SDK v9) - Named Database: 'richting01'
+- **Infrastructure:** Firebase Hosting, GCP
+
+### Project Structure
+- Services: `services/firebase.ts` - Alle Firestore interacties
+- Types: `types.ts` en `types/firestore.ts`
+- Components: `components/`
+- Main App: `App.tsx`
+
+## Strikte Regels
+
+### 1. Firestore Security
+- **GENEREER NOOIT** een frontend-query zonder `firestore.rules` te verifiëren
+- Als je een query wijzigt, **HERINNER MIJ** om de regels bij te werken
+- Gebruik altijd de named database `'richting01'` - NOOIT de default database
+- Database initialisatie: `getFirestore(app, 'richting01')`
+
+### 2. Modulariteit & Services
+- Alle Firestore-interacties moeten via `services/firebase.ts` verlopen
+- Gebruik **GEEN** `getDoc`, `setDoc`, `collection` direct in UI-componenten
+- Gebruik altijd de service functies: `customerService`, `dbService`, `authService`, etc.
+
+### 3. Async Veiligheid
+- Behandel `onSnapshot` afmeldingen altijd in `useEffect` cleanup functies
+- Gebruik `try-catch` voor alle async operaties
+- Return lege arrays `[]` in plaats van errors te throwen in query functies (voorkomt app crashes)
+
+### 4. Cloud Functions
+- Wij gebruiken **v2 Functions** met `onRequest` (HTTP) en `onCall` (Callable)
+- Alle functies moeten de `richting01` database gebruiken via `getFirestoreDb()`
+- Gebruik `db.FieldValue.serverTimestamp()` (niet `admin.firestore.FieldValue`)
+- Model: Gebruik `gemini-flash-latest` (niet gemini-1.5-flash of gemini-2.5-flash)
+
+### 5. Types & TypeScript
+- Alle types in `types.ts` en `types/firestore.ts`
+- Cloud Function returns moeten getypeerd zijn
+- Gebruik TypeScript interfaces voor alle data structuren
+
+### 6. No Hallucinations - Firebase SDK
+- Gebruik **ALLEEN** Firebase Modular SDK (v9+)
+- Importeer **NOOIT** firebase/app of firebase/auth op de v8 manier
+- Correct: `import { getFirestore } from 'firebase/firestore'`
+- Fout: `import firebase from 'firebase/app'` (v8 style)
+
+### 7. Error Handling
+- Geen blanco schermen: altijd error boundaries en fallbacks
+- Log errors naar console met duidelijke prefixen (✅ ❌ ⚠️)
+- Return lege arrays/objects bij errors, niet undefined of null
+
+### 8. Database Initialisatie
+- **ALTIJD** gebruik `getFirestore(app, 'richting01')` voor named database
+- In Cloud Functions: gebruik `getFirestoreDb()` helper functie
+- **NOOIT** de default database gebruiken
+
+### 9. API Keys & Environment
+- Frontend: `VITE_GEMINI_API_KEY` in `.env.local`
+- Cloud Functions: `GEMINI_API_KEY` in `functions/.env`
+- Firebase API key: in `services/firebase.ts` (firebaseConfig)
+
+### 10. Code Quality
+- Test altijd na wijzigingen
+- Maak backups voordat grote wijzigingen
+- Documenteer complexe logica
+- Gebruik consistente naming conventions
+
