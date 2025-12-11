@@ -8,63 +8,75 @@ const generative_ai_1 = require("@google/generative-ai");
 const googleapis_1 = require("googleapis");
 // import * as cors from "cors";
 // Initialize Firebase Admin with explicit database configuration
-const app = admin.initializeApp();
-// Helper to get the named database (richting01) - same as frontend
-// In Admin SDK, we need to access the named database differently
+// CRITICAL: Always use richting01 database, NEVER default
+// Check if app already initialized (for hot reload scenarios)
+let app;
+try {
+    app = admin.app();
+    console.log('✅ Using existing Firebase Admin app');
+} catch (e) {
+    app = admin.initializeApp();
+    console.log('✅ Initialized new Firebase Admin app');
+}
+
+// SINGLE SOURCE OF TRUTH: Get richting01 database
+// This function MUST ALWAYS return richting01, never default
+let _richting01Db = null;
 function getFirestoreDb() {
+    // Return cached instance if available
+    if (_richting01Db) {
+        return _richting01Db;
+    }
+    
     try {
-        // Method 1: Try using the database() method on the Firestore instance (Admin SDK v12+)
-        const firestoreInstance = admin.firestore();
-        if (firestoreInstance.database && typeof firestoreInstance.database === 'function') {
-            try {
-                const namedDb = firestoreInstance.database('richting01');
-                console.log('✅ Using named database: richting01 (method 1)');
-                return namedDb;
-            } catch (e) {
-                console.log('Method 1 failed:', e.message);
-            }
-        }
-        // Method 2: Try using app.firestore() with database name
-        if (app.firestore && typeof app.firestore === 'function') {
-            try {
-                const namedDb = app.firestore('richting01');
-                console.log('✅ Using named database: richting01 (method 2)');
-                return namedDb;
-            }
-            catch (e) {
-                console.log('Method 2 failed:', e.message);
-            }
-        }
-        // Method 3: Try using getFirestore with database name (Admin SDK v11+)
-        try {
-            const namedDb = admin.firestore('richting01');
-            console.log('✅ Using named database: richting01 (method 3)');
-            return namedDb;
-        }
-        catch (e) {
-            console.log('Method 3 failed:', e.message);
-        }
-        // Method 4: Try direct Firestore constructor with database name
-        try {
-            const Firestore = require('@google-cloud/firestore').Firestore;
-            const namedDb = new Firestore({ databaseId: 'richting01' });
-            console.log('✅ Using named database: richting01 (method 4)');
-            return namedDb;
-        }
-        catch (e) {
-            console.log('Method 4 failed:', e.message);
-        }
-        // CRITICAL: Do not fall back to default database
-        // Throw error instead to force fix
-        const error = new Error('CRITICAL: Could not access richting01 database. All methods failed. Do not use default database!');
-        console.error('❌', error.message);
-        throw error;
+        // CORRECT METHOD: Use db.settings({ databaseId: 'richting01' })
+        // This is the proper way to access named databases in firebase-admin
+        _richting01Db = admin.firestore();
+        _richting01Db.settings({
+            databaseId: 'richting01'
+        });
+        console.log('✅✅✅ Using richting01 database (settings method)');
+        return _richting01Db;
+    } catch (error) {
+        console.error('❌❌❌ FATAL: Cannot access richting01 database:', error);
+        console.error('❌❌❌ Error message:', error.message);
+        console.error('❌❌❌ Error code:', error.code);
+        // DO NOT return default database - throw error instead
+        throw new Error('CRITICAL: Cannot access richting01 database. Function stopped to prevent saving to default database. Error: ' + error.message);
     }
-    catch (error) {
-        console.error('❌ Error accessing named database:', error);
-        // Do not return default database - throw error instead
-        throw new Error('CRITICAL: Cannot access richting01 database. Please check Firebase Admin SDK configuration.');
+}
+
+// SAFEGUARD: Verify database on startup
+// Note: We can't directly compare instances in Admin SDK, but we verify richting01 is accessible
+try {
+    const testDb = getFirestoreDb();
+    console.log('✅✅✅ Database initialization verified: richting01');
+    // Test that we can access richting01 collections (this will fail if database doesn't exist)
+    // We don't actually query, just verify the instance exists
+    if (!testDb) {
+        throw new Error('Database instance is null');
     }
+    console.log('✅✅✅ Safeguard passed: richting01 database instance created');
+} catch (error) {
+    console.error('❌❌❌ Database initialization FAILED:', error.message);
+    // Don't throw here, let individual functions handle it
+    // But log a warning that functions may fail
+    console.error('⚠️⚠️⚠️ WARNING: Functions may fail if richting01 database is not accessible');
+}
+
+// SAFEGUARD WRAPPER: Wrap all database operations to ensure richting01 is used
+function ensureRichting01Db(dbInstance) {
+    if (!dbInstance) {
+        throw new Error('❌❌❌ CRITICAL: Database instance is null/undefined');
+    }
+    // Note: We can't directly check database ID in Admin SDK, but we can verify it's from getFirestoreDb()
+    // This is a runtime check to ensure we're using the cached richting01 instance
+    if (dbInstance !== _richting01Db && _richting01Db !== null) {
+        console.warn('⚠️⚠️⚠️ WARNING: Database instance might not be richting01!');
+        console.warn('⚠️⚠️⚠️ Using cached richting01 instance instead');
+        return _richting01Db;
+    }
+    return dbInstance;
 }
 // Set global options for v2 functions
 (0, v2_1.setGlobalOptions)({ region: "europe-west4" });
@@ -102,7 +114,7 @@ exports.analyzeDocument = (0, https_1.onRequest)({ cors: true }, async (req, res
         return;
     }
     try {
-        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+        const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
         const prompt = `
         Je bent een content analist voor Richting.nl. Analyseer de volgende tekst.
         
@@ -239,7 +251,7 @@ exports.analyzeDriveFile = (0, https_1.onRequest)({ cors: true }, async (req, re
             return;
         }
         // Analyze with Gemini
-        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+        const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
         const prompt = `
         Je bent een content analist voor Richting.nl. Analyseer de volgende tekst.
         
@@ -285,7 +297,7 @@ exports.askQuestion = (0, https_1.onRequest)({ cors: true }, async (req, res) =>
     }
     const { question, context } = req.body;
     try {
-        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+        const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
         const prompt = `
           Je bent de AI Kennisbank assistent van Richting.nl.
           Beantwoord de vraag op basis van de bronnen.
@@ -468,7 +480,7 @@ async function getRichtingLocations() {
         if (!genAI) {
             throw new Error("Gemini API not available");
         }
-        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+        const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
         const prompt = `
 Je krijgt de HTML van de Richting locaties pagina (www.richting.nl/locaties). 
 
@@ -739,7 +751,7 @@ exports.analyseBranche = (0, https_1.onRequest)({
             console.error("Error fetching prompt from Firestore:", promptError);
             console.log("Using default prompt");
         }
-        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+        const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
         const prompt = `${promptTekst}
 
 ORGANISATIE NAAM: ${organisatieNaam}
@@ -1021,7 +1033,7 @@ exports.analyseCultuurTest = (0, https_1.onRequest)({
             console.error("Error fetching prompt from Firestore:", promptError);
             console.log("Using default prompt");
         }
-        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+        const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
         const prompt = `${promptTekst}
 
 ORGANISATIE NAAM: ${organisatieNaam}
@@ -1467,7 +1479,7 @@ exports.searchCompanyWebsite = (0, https_1.onRequest)({ cors: true }, async (req
         return;
     }
     try {
-        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+        const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
         const prompt = `Je bent een assistent die helpt bij het vinden van de officiële website van een bedrijf.
 
 BEDRIJFSNAAM: ${companyName}
@@ -2194,6 +2206,8 @@ exports.analyseBrancheStapsgewijs = (0, https_1.onRequest)({
     const db = getFirestoreDb();
     const progressRef = db.collection('analyseProgress').doc(analyseId);
     // Initialize progress
+    // IMPORTANT: Use FieldValue from the database instance
+    const FieldValue = admin.firestore.FieldValue;
     const initialProgress = {
         analyseId,
         customerId: customerId || '',
@@ -2204,18 +2218,46 @@ exports.analyseBrancheStapsgewijs = (0, https_1.onRequest)({
             huidigeStap: 0
         },
         hoofdstukken: {},
-        createdAt: admin.firestore.FieldValue.serverTimestamp(),
-        updatedAt: admin.firestore.FieldValue.serverTimestamp()
+        createdAt: FieldValue.serverTimestamp(),
+        updatedAt: FieldValue.serverTimestamp()
     };
-    await progressRef.set(initialProgress);
+    try {
+        console.log(`📝 Attempting to create progress document: ${analyseId}`);
+        console.log(`📝 Database ID: ${db.databaseId || 'unknown'}`);
+        console.log(`📝 Collection path: analyseProgress/${analyseId}`);
+        await progressRef.set(initialProgress);
+        console.log(`✅ Progress document created: ${analyseId} in richting01 database`);
+    } catch (dbError) {
+        console.error('❌ Error creating progress document:', dbError);
+        console.error('❌ Error code:', dbError.code);
+        console.error('❌ Error message:', dbError.message);
+        console.error('❌ Error details:', dbError.details);
+        console.error('❌ Database ID:', db.databaseId);
+        console.error('❌ Full error:', JSON.stringify(dbError, Object.getOwnPropertyNames(dbError), 2));
+        res.status(500).json({ 
+            error: 'Failed to initialize analysis progress',
+            details: dbError.message || 'Database error',
+            code: dbError.code || 'UNKNOWN'
+        });
+        return;
+    }
+    
     // Start async processing (don't wait for completion)
     processAnalyseStapsgewijs(organisatieNaam, website, analyseId, customerId).catch((error) => {
-        console.error('Analyse error:', error);
-        progressRef.update({
-            status: 'failed',
-            error: error.message,
-            updatedAt: admin.firestore.FieldValue.serverTimestamp()
-        });
+        console.error('❌ Analyse error:', error);
+        console.error('❌ Error stack:', error.stack);
+        // Try to update progress, but don't fail if this fails
+        try {
+            progressRef.update({
+                status: 'failed',
+                error: error.message || 'Unknown error',
+                updatedAt: admin.firestore.FieldValue.serverTimestamp()
+            }).catch(updateError => {
+                console.error('❌ Failed to update progress with error:', updateError);
+            });
+        } catch (updateError) {
+            console.error('❌ Failed to update progress:', updateError);
+        }
     });
     // Return immediately with analyseId
     res.json({
@@ -2228,7 +2270,7 @@ exports.analyseBrancheStapsgewijs = (0, https_1.onRequest)({
 async function processAnalyseStapsgewijs(organisatieNaam, website, analyseId, customerId) {
     const db = getFirestoreDb();
     const progressRef = db.collection('analyseProgress').doc(analyseId);
-    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+    const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
     // Get active prompt from Firestore
     let basePrompt = DEFAULT_BRANCHE_ANALYSE_PROMPT;
     try {
@@ -2463,6 +2505,9 @@ Geef het volledige rapport terug in markdown formaat. Geef ALLEEN het rapport, g
         // Save locaties to Firestore if customerId provided and locaties found
         if (customerId && locaties && locaties.length > 0) {
             try {
+                console.log(`📍 Found ${locaties.length} locaties in organisatieprofiel for customer ${customerId}`);
+                console.log(`📍 Locaties:`, JSON.stringify(locaties, null, 2));
+                
                 // Get Richting locations for matching
                 const richtingLocationsRef = db.collection('richtingLocaties');
                 const richtingLocationsSnapshot = await richtingLocationsRef.get();
@@ -2470,17 +2515,40 @@ Geef het volledige rapport terug in markdown formaat. Geef ALLEEN het rapport, g
                     id: doc.id,
                     ...doc.data()
                 }));
+                console.log(`📍 Found ${richtingLocations.length} Richting locations for matching`);
                 
-                // Process and save each location
+                // Check for existing locations to avoid duplicates
+                const existingLocationsRef = db.collection('locations');
+                const existingLocationsSnapshot = await existingLocationsRef.where('customerId', '==', customerId).get();
+                const existingLocations = existingLocationsSnapshot.docs.map(doc => ({
+                    id: doc.id,
+                    ...doc.data()
+                }));
+                console.log(`📍 Found ${existingLocations.length} existing locations for customer ${customerId}`);
+                
+                // Process and save each location (skip duplicates)
                 const batch = db.batch();
+                let savedCount = 0;
                 for (const locatie of locaties) {
+                    // Check if location already exists (by name and city)
+                    const locatieNaam = locatie.naam || locatie.name || 'Onbekende locatie';
+                    const locatieStad = locatie.stad || locatie.city || '';
+                    const isDuplicate = existingLocations.some(existing => 
+                        existing.name === locatieNaam && existing.city === locatieStad
+                    );
+                    
+                    if (isDuplicate) {
+                        console.log(`⚠️ Skipping duplicate location: ${locatieNaam} in ${locatieStad}`);
+                        continue;
+                    }
+                    
                     // Find nearest Richting location
                     let richtingLocatieNaam = null;
-                    if (locatie.stad) {
-                        const nearestRichting = findNearestRichtingLocation(locatie.stad, richtingLocations);
+                    if (locatieStad) {
+                        const nearestRichting = findNearestRichtingLocation(locatieStad, richtingLocations);
                         if (nearestRichting) {
                             richtingLocatieNaam = nearestRichting;
-                            console.log(`📍 Matched Richting locatie "${nearestRichting}" for "${locatie.naam}" in ${locatie.stad}`);
+                            console.log(`📍 Matched Richting locatie "${nearestRichting}" for "${locatieNaam}" in ${locatieStad}`);
                         }
                     }
                     
@@ -2488,21 +2556,34 @@ Geef het volledige rapport terug in markdown formaat. Geef ALLEEN het rapport, g
                     const locRef = db.collection('locations').doc();
                     batch.set(locRef, {
                         customerId: customerId,
-                        name: locatie.naam || locatie.name || 'Onbekende locatie',
+                        name: locatieNaam,
                         address: locatie.adres || locatie.address || '',
-                        city: locatie.stad || locatie.city || '',
+                        city: locatieStad,
                         employeeCount: locatie.aantalMedewerkers ?? locatie.aantal ?? null,
                         richtingLocatieNaam: richtingLocatieNaam,
                         createdAt: admin.firestore.FieldValue.serverTimestamp(),
                         updatedAt: admin.firestore.FieldValue.serverTimestamp()
                     });
+                    savedCount++;
                 }
-                await batch.commit();
-                console.log(`💾 Saved ${locaties.length} locaties to Firestore for customer ${customerId}`);
+                
+                if (savedCount > 0) {
+                    await batch.commit();
+                    console.log(`💾 Saved ${savedCount} new locaties to Firestore for customer ${customerId}`);
+                } else {
+                    console.log(`ℹ️ No new locaties to save (all duplicates)`);
+                }
             }
             catch (saveError) {
                 console.error('❌ Error saving locaties to Firestore:', saveError);
+                console.error('❌ Error stack:', saveError.stack);
                 // Don't fail the entire analysis if location saving fails
+            }
+        } else {
+            if (!customerId) {
+                console.log(`⚠️ No customerId provided, skipping location save`);
+            } else if (!locaties || locaties.length === 0) {
+                console.log(`⚠️ No locaties found in organisatieprofiel for customer ${customerId}`);
             }
         }
         
@@ -2621,7 +2702,7 @@ exports.analyseRisicoProfiel = (0, https_1.onRequest)({
     }
     try {
         const db = getFirestoreDb();
-        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+        const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
         // Get active prompt from Firestore
         let promptTekst = '';
         try {

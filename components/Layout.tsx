@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { User, UserRole } from '../types';
 import { authService, logoService } from '../services/firebase';
 
@@ -79,14 +79,20 @@ export const Layout: React.FC<LayoutProps> = ({ children, user, onLogout, curren
     ? [{ id: 'settings', label: 'Instellingen', icon: '⚙️' }]
     : [];
   
-  // Debug logging
-  console.log('🔍 Layout Debug:', { 
-    userRole: user.role, 
-    userRoleType: typeof user.role,
-    UserRoleADMIN: UserRole.ADMIN,
-    isAdmin, 
-    adminNavItemsLength: adminNavItems.length 
-  });
+  // Debug logging (only once per user, not on every render)
+  const debugLogged = useRef(false);
+  useEffect(() => {
+    if (!debugLogged.current) {
+      console.log('🔍 Layout Debug:', { 
+        userRole: user.role, 
+        userRoleType: typeof user.role,
+        UserRoleADMIN: UserRole.ADMIN,
+        isAdmin, 
+        adminNavItemsLength: adminNavItems.length 
+      });
+      debugLogged.current = true;
+    }
+  }, [user.role, isAdmin, adminNavItems.length]);
 
   const handleRoleSwitch = async (role: UserRole) => {
       await authService.updateUserRole(user.id, role);
