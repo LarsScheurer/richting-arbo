@@ -50,7 +50,7 @@ const getCategoryLabel = (mainId: string, subId?: string) => {
 const getStatusLabel = (status: string) => {
   switch (status) {
     case 'active': return 'Actief';
-    case 'churned': return 'Gearchiveerd';
+    case 'churned': return 'Beëindigd';
     case 'prospect': return 'Prospect';
     case 'rejected': return 'Afgewezen';
     default: return status;
@@ -708,6 +708,43 @@ const CustomerDetailView = ({
   const [deletingLocation, setDeletingLocation] = useState<Location | null>(null);
   const [isAnalyzingOrganisatie, setIsAnalyzingOrganisatie] = useState(false);
   const [isFetchingLocations, setIsFetchingLocations] = useState(false);
+  
+  // Status Change State
+  const [showStatusModal, setShowStatusModal] = useState(false);
+  const [pendingStatus, setPendingStatus] = useState<'active' | 'prospect' | 'churned' | 'rejected' | null>(null);
+  const [statusReason, setStatusReason] = useState('');
+  const [statusDate, setStatusDate] = useState(new Date().toISOString().split('T')[0]);
+
+  // Satisfaction State
+  const [showSatisfactionModal, setShowSatisfactionModal] = useState(false);
+  const [satisfactionTrust, setSatisfactionTrust] = useState<number>(0);
+  const [satisfactionAttention, setSatisfactionAttention] = useState<number>(0);
+  const [satisfactionEquality, setSatisfactionEquality] = useState<number>(0);
+  const [satisfactionNotes, setSatisfactionNotes] = useState('');
+  const [satisfactionDate, setSatisfactionDate] = useState(new Date().toISOString().split('T')[0]);
+
+  // Edit Customer State
+  const [isEditingCustomer, setIsEditingCustomer] = useState(false);
+  const [editCustomerName, setEditCustomerName] = useState('');
+  const [editCustomerIndustry, setEditCustomerIndustry] = useState('');
+  const [editCustomerWebsite, setEditCustomerWebsite] = useState('');
+  const [editCustomerEmployeeCount, setEditCustomerEmployeeCount] = useState<number | undefined>(undefined);
+
+  // Initialize edit fields when customer loads/changes
+  useEffect(() => {
+    setEditCustomerName(customer.name);
+    setEditCustomerIndustry(customer.industry);
+    setEditCustomerWebsite(customer.website || '');
+    setEditCustomerEmployeeCount(customer.employeeCount);
+    
+    if (customer.satisfaction) {
+      setSatisfactionTrust(customer.satisfaction.trust);
+      setSatisfactionAttention(customer.satisfaction.attention);
+      setSatisfactionEquality(customer.satisfaction.equality);
+      setSatisfactionNotes(customer.satisfaction.notes || '');
+      setSatisfactionDate(customer.satisfaction.lastUpdated.split('T')[0]);
+    }
+  }, [customer]);
   const [isAnalyzingCultuur, setIsAnalyzingCultuur] = useState(false);
   const [organisatieAnalyseResultaat, setOrganisatieAnalyseResultaat] = useState<string | null>(null);
   const [cultuurAnalyseResultaat, setCultuurAnalyseResultaat] = useState<string | null>(null);
@@ -1119,15 +1156,108 @@ const CustomerDetailView = ({
     setContactFirst(''); setContactLast(''); setContactEmail(''); setContactRole('');
   };
 
-  const handleChangeStatus = async (newStatus: 'active' | 'prospect' | 'churned' | 'rejected') => {
+  const handleSaveStatusChange = async () => {
+    if (!pendingStatus) return;
+    
     try {
-      console.log(`🔄 Changing status for customer ${customer.id} to ${newStatus}`);
-      await customerService.updateCustomerStatus(customer.id, newStatus);
+      console.log(`🔄 Changing status for customer ${customer.id} to ${pendingStatus}`);
+      
+      const updates: Partial<Customer> = {
+        status: pendingStatus,
+        statusDetails: {
+          date: statusDate,
+          reason: statusReason,
+          updatedBy: user.name
+        }
+      };
+      
+      await customerService.updateCustomer(customer.id, updates);
       console.log(`✅ Status updated successfully`);
-      onUpdate({ ...customer, status: newStatus });
+      
+      onUpdate({ ...customer, ...updates });
+      setShowStatusModal(false);
+      setPendingStatus(null);
+      setStatusReason('');
     } catch (error: any) {
       console.error('❌ Error updating status:', error);
       alert(`Fout bij aanpassen status: ${error.message || 'Onbekende fout'}`);
+    }
+  };
+
+  const handleSaveSatisfaction = async () => {
+    try {
+      // Calculate new average
+      const currentAvg = (satisfactionTrust + satisfactionAttention + satisfactionEquality) / 3;
+      
+      // Get previous average if exists
+      let previousAvg = customer.satisfaction?.previousAverage;
+      
+      // If we already have a satisfaction record, the "current" average becomes the "previous" average
+      // UNLESS we are just updating the notes/date without changing the score significantly, 
+      // but usually any save here implies a new measurement point.
+      // To properly track trend, we should store the OLD average as previousAverage.
+      if (customer.satisfaction) {
+         const oldAvg = (customer.satisfaction.trust + customer.satisfaction.attention + customer.satisfaction.equality) / 3;
+         // Only update previousAvg if the score actually changed, otherwise keep the old previousAvg
+         if (Math.abs(oldAvg - currentAvg) > 0.01) {
+             previousAvg = oldAvg;
+         }
+      }
+
+      // Update history
+      const newEntry = {
+        date: new Date(satisfactionDate).toISOString(),
+        trust: satisfactionTrust,
+        attention: satisfactionAttention,
+        equality: satisfactionEquality,
+        average: currentAvg,
+        notes: satisfactionNotes
+      };
+
+      // Ensure satisfactionHistory exists
+      const history = customer.satisfactionHistory || [];
+      
+      // Add new entry and sort descending by date (newest first)
+      const newHistory = [newEntry, ...history].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+
+      const updates: Partial<Customer> = {
+        satisfaction: {
+          trust: satisfactionTrust,
+          attention: satisfactionAttention,
+          equality: satisfactionEquality,
+          notes: satisfactionNotes,
+          lastUpdated: new Date(satisfactionDate).toISOString(),
+          previousAverage: previousAvg
+        },
+        satisfactionHistory: newHistory
+      };
+      
+      await customerService.updateCustomer(customer.id, updates);
+      onUpdate({ ...customer, ...updates });
+      setShowSatisfactionModal(false);
+      alert('✅ Klanttevredenheid opgeslagen!');
+    } catch (error: any) {
+      console.error('❌ Error updating satisfaction:', error);
+      alert(`Fout bij opslaan: ${error.message}`);
+    }
+  };
+
+  const handleSaveCustomerDetails = async () => {
+    try {
+      const updates: Partial<Customer> = {
+        name: editCustomerName,
+        industry: editCustomerIndustry,
+        website: editCustomerWebsite,
+        employeeCount: editCustomerEmployeeCount
+      };
+      
+      await customerService.updateCustomer(customer.id, updates);
+      onUpdate({ ...customer, ...updates });
+      setIsEditingCustomer(false);
+      alert('✅ Klantgegevens bijgewerkt');
+    } catch (error: any) {
+      console.error('❌ Error updating customer details:', error);
+      alert(`Fout bij opslaan: ${error.message}`);
     }
   };
 
@@ -1470,8 +1600,7 @@ const CustomerDetailView = ({
                     >
                         <option value="active">Actief</option>
                         <option value="prospect">Prospect</option>
-                        <option value="churned">Archief</option>
-                        <option value="rejected">Afgewezen</option>
+                        <option value="churned">Beëindigd</option>
                     </select>
 
                     {user.role === 'ADMIN' && (
@@ -1486,16 +1615,327 @@ const CustomerDetailView = ({
                     )}
                 </div>
 
-                <div className="w-16 h-16 bg-white border border-gray-100 rounded-lg flex items-center justify-center overflow-hidden">
-                {displayLogoUrl ? (
-                    <img src={displayLogoUrl} alt={customer.name} className="w-14 h-14 object-contain" />
-                ) : (
-                    <div className="w-full h-full bg-gray-50"></div>
-                )}
+                <div className="flex items-start gap-4">
+                    <div className="relative group">
+                      <div className="w-16 h-16 bg-white border border-gray-100 rounded-lg flex items-center justify-center overflow-hidden cursor-pointer" onClick={() => setIsEditingCustomer(true)}>
+                      {displayLogoUrl ? (
+                          <img src={displayLogoUrl} alt={customer.name} className="w-14 h-14 object-contain" />
+                      ) : (
+                          <div className="w-full h-full bg-gray-50 flex items-center justify-center text-2xl">🏢</div>
+                      )}
+                      <div className="absolute inset-0 bg-black bg-opacity-0 group-hover:bg-opacity-10 transition-all flex items-center justify-center">
+                        <span className="opacity-0 group-hover:opacity-100 text-xs font-bold bg-white px-1 rounded shadow">Edit</span>
+                      </div>
+                      </div>
+                    </div>
+                    
+                    <div className="flex-1">
+                        {isEditingCustomer ? (
+                          <div className="bg-white p-4 rounded-lg shadow-lg border border-gray-200 absolute z-10 w-96">
+                            <h4 className="font-bold mb-3">Klantgegevens Bewerken</h4>
+                            <div className="space-y-3">
+                              <div>
+                                <label className="block text-xs font-medium text-gray-700">Naam</label>
+                                <input className="w-full border p-1 rounded text-sm" value={editCustomerName} onChange={e => setEditCustomerName(e.target.value)} />
+                              </div>
+                              <div>
+                                <label className="block text-xs font-medium text-gray-700">Branche</label>
+                                <input className="w-full border p-1 rounded text-sm" value={editCustomerIndustry} onChange={e => setEditCustomerIndustry(e.target.value)} />
+                              </div>
+                              <div>
+                                <label className="block text-xs font-medium text-gray-700">Website</label>
+                                <input className="w-full border p-1 rounded text-sm" value={editCustomerWebsite} onChange={e => setEditCustomerWebsite(e.target.value)} />
+                              </div>
+                              <div>
+                                <label className="block text-xs font-medium text-gray-700">Medewerkers</label>
+                                <input type="number" className="w-full border p-1 rounded text-sm" value={editCustomerEmployeeCount || ''} onChange={e => setEditCustomerEmployeeCount(parseInt(e.target.value))} />
+                              </div>
+                              <div className="flex justify-end gap-2 pt-2">
+                                <button onClick={() => setIsEditingCustomer(false)} className="text-xs px-3 py-1 bg-gray-100 rounded">Annuleren</button>
+                                <button onClick={handleSaveCustomerDetails} className="text-xs px-3 py-1 bg-richting-orange text-white rounded font-bold">Opslaan</button>
+                              </div>
+                            </div>
+                          </div>
+                        ) : (
+                          <>
+                            <div className="flex items-center gap-2 cursor-pointer hover:text-richting-orange transition-colors" onClick={() => setIsEditingCustomer(true)}>
+                                <span className="text-xs bg-gray-100 text-gray-500 px-2 py-1 rounded-full font-normal">
+                                    <span className="text-gray-400 mr-1">👥</span>
+                                    {customer.employeeCount?.toLocaleString('nl-NL') || '?'} mdw
+                                </span>
+                                <span className="text-gray-300 text-sm">✎</span>
+                            </div>
+                            <div className="flex items-center gap-4 text-sm text-gray-500 mt-1">
+                                <span>{customer.industry}</span>
+                                {customer.website && (
+                                    <a href={ensureUrl(customer.website)} target="_blank" rel="noopener noreferrer" className="text-richting-orange hover:underline flex items-center gap-1">
+                                        🔗 {customer.website.replace(/^https?:\/\//, '')}
+                                    </a>
+                                )}
+                            </div>
+                          </>
+                        )}
+                    </div>
+                </div>
+
+                <div className="flex flex-col items-end gap-2">
+                    <div className="flex items-center gap-2">
+                      {/* Status Dropdown */}
+                      <select 
+                          value={customer.status || 'active'}
+                          onChange={(e) => {
+                            const newStatus = e.target.value as any;
+                            setPendingStatus(newStatus);
+                            setShowStatusModal(true);
+                          }}
+                          className="text-xs border border-gray-300 rounded px-2 py-1 bg-white text-gray-600 focus:ring-richting-orange focus:border-richting-orange cursor-pointer"
+                      >
+                          <option value="active">Actief</option>
+                          <option value="prospect">Prospect</option>
+                          <option value="churned">Beëindigd</option>
+                      </select>
+                      
+                      {/* Status Badge */}
+                      <span className={`px-2 py-0.5 rounded text-xs font-bold uppercase flex-shrink-0 ${
+                        customer.status === 'active' ? 'bg-green-100 text-green-700' : 
+                        customer.status === 'prospect' ? 'bg-blue-100 text-blue-700' : 
+                        customer.status === 'churned' ? 'bg-red-100 text-red-700' :
+                        'bg-gray-100 text-gray-600'
+                      }`}>
+                        {getStatusLabel(customer.status)}
+                      </span>
+                    </div>
+                    
+                    {customer.statusDetails && (
+                      <div className="text-xs text-gray-400 text-right max-w-[200px]">
+                        <p>{new Date(customer.statusDetails.date).toLocaleDateString('nl-NL')}: {customer.statusDetails.reason}</p>
+                      </div>
+                    )}
+
+                    <div className="flex gap-2 mt-2">
+                      <button 
+                        onClick={() => setShowSatisfactionModal(true)}
+                        className={`text-xs flex items-center gap-2 px-3 py-1.5 rounded-full transition-all border shadow-sm ${
+                          customer.satisfaction
+                            ? (() => {
+                                const avg = (customer.satisfaction.trust + customer.satisfaction.attention + customer.satisfaction.equality) / 3;
+                                if (avg > 7) return 'bg-green-50 text-green-700 border-green-200 hover:bg-green-100';
+                                if (avg >= 6) return 'bg-yellow-50 text-yellow-700 border-yellow-200 hover:bg-yellow-100';
+                                return 'bg-red-50 text-red-700 border-red-200 hover:bg-red-100';
+                              })()
+                            : 'bg-gray-50 text-gray-600 border-gray-200 hover:bg-gray-100'
+                        }`}
+                      >
+                        <span className="text-sm">⭐</span>
+                        {customer.satisfaction ? (
+                          <div className="flex items-center gap-2">
+                            <div className="flex flex-col items-start leading-none">
+                              <span className="font-bold text-sm">
+                                {((customer.satisfaction.trust + customer.satisfaction.attention + customer.satisfaction.equality) / 3).toFixed(1)}
+                              </span>
+                            </div>
+                            
+                            {/* Trend Arrow */}
+                            {(() => {
+                                const current = (customer.satisfaction.trust + customer.satisfaction.attention + customer.satisfaction.equality) / 3;
+                                const previous = customer.satisfaction.previousAverage;
+                                if (previous === undefined) return <span className="text-gray-400 text-xs">•</span>;
+                                if (current > previous) return <span className="text-green-600 text-xs font-bold">↗</span>;
+                                if (current < previous) return <span className="text-red-600 text-xs font-bold">↘</span>;
+                                return <span className="text-gray-500 text-xs font-bold">=</span>;
+                            })()}
+
+                            {/* Date */}
+                            <span className="text-[10px] opacity-70 border-l pl-2 border-current">
+                              {new Date(customer.satisfaction.lastUpdated).toLocaleDateString('nl-NL', { day: 'numeric', month: 'short' })}
+                            </span>
+                          </div>
+                        ) : (
+                          <span>Klanttevredenheid</span>
+                        )}
+                      </button>
+                      
+                      {onShowKlantreis && (
+                          <button 
+                              onClick={onShowKlantreis}
+                              className="text-xs flex items-center gap-1 bg-blue-50 text-blue-700 px-2 py-1 rounded hover:bg-blue-100 transition-colors border border-blue-200"
+                          >
+                              🚀 Klantreis
+                          </button>
+                      )}
+                      
+                      {user.role === 'ADMIN' && (
+                          <button 
+                              onClick={handleDelete}
+                              className="text-xs flex items-center gap-1 bg-red-50 text-red-700 px-2 py-1 rounded hover:bg-red-100 transition-colors border border-red-200"
+                          >
+                              <TrashIcon />
+                              {isDeleting ? 'Bezig...' : 'Verwijderen'}
+                          </button>
+                      )}
+                    </div>
                 </div>
             </div>
           </div>
        </div>
+
+       {/* Status Change Modal */}
+       {showStatusModal && (
+         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+           <div className="bg-white rounded-xl p-6 w-96 shadow-xl">
+             <h3 className="font-bold text-lg mb-4">Status wijzigen naar '{getStatusLabel(pendingStatus || '')}'</h3>
+             <div className="space-y-4">
+               <div>
+                 <label className="block text-sm font-medium text-gray-700 mb-1">Datum</label>
+                 <input 
+                   type="date" 
+                   value={statusDate}
+                   onChange={(e) => setStatusDate(e.target.value)}
+                   className="w-full border p-2 rounded"
+                 />
+               </div>
+               <div>
+                 <label className="block text-sm font-medium text-gray-700 mb-1">Toelichting / Reden</label>
+                 <textarea 
+                   value={statusReason}
+                   onChange={(e) => setStatusReason(e.target.value)}
+                   className="w-full border p-2 rounded h-24"
+                   placeholder="Bijv. Contract afgelopen, nieuwe strategie..."
+                 />
+               </div>
+               <div className="flex justify-end gap-2 pt-2">
+                 <button 
+                   onClick={() => { setShowStatusModal(false); setPendingStatus(null); }}
+                   className="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded"
+                 >
+                   Annuleren
+                 </button>
+                 <button 
+                   onClick={handleSaveStatusChange}
+                   className="px-4 py-2 bg-richting-orange text-white rounded font-bold hover:bg-orange-600"
+                 >
+                   Opslaan
+                 </button>
+               </div>
+             </div>
+           </div>
+         </div>
+       )}
+
+       {/* Satisfaction Modal */}
+       {showSatisfactionModal && (
+         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+           <div className="bg-white rounded-xl p-6 w-[500px] shadow-xl">
+             <h3 className="font-bold text-lg mb-4 flex items-center gap-2">⭐ Klanttevredenheid</h3>
+             <div className="space-y-6">
+               <div className="space-y-4">
+                 <div>
+                   <div className="flex justify-between mb-1">
+                     <label className="text-sm font-medium text-gray-700">Vertrouwen</label>
+                     <span className="font-bold text-richting-orange">{satisfactionTrust}/10</span>
+                   </div>
+                   <input 
+                     type="range" min="0" max="10" step="0.5"
+                     value={satisfactionTrust}
+                     onChange={(e) => setSatisfactionTrust(parseFloat(e.target.value))}
+                     className="w-full accent-richting-orange"
+                   />
+                 </div>
+                 <div>
+                   <div className="flex justify-between mb-1">
+                     <label className="text-sm font-medium text-gray-700">Aandacht & Oprechte interesse</label>
+                     <span className="font-bold text-richting-orange">{satisfactionAttention}/10</span>
+                   </div>
+                   <input 
+                     type="range" min="0" max="10" step="0.5"
+                     value={satisfactionAttention}
+                     onChange={(e) => setSatisfactionAttention(parseFloat(e.target.value))}
+                     className="w-full accent-richting-orange"
+                   />
+                 </div>
+                 <div>
+                   <div className="flex justify-between mb-1">
+                     <label className="text-sm font-medium text-gray-700">Gelijkwaardigheid</label>
+                     <span className="font-bold text-richting-orange">{satisfactionEquality}/10</span>
+                   </div>
+                   <input 
+                     type="range" min="0" max="10" step="0.5"
+                     value={satisfactionEquality}
+                     onChange={(e) => setSatisfactionEquality(parseFloat(e.target.value))}
+                     className="w-full accent-richting-orange"
+                   />
+                 </div>
+               </div>
+               
+               <div>
+                 <label className="block text-sm font-medium text-gray-700 mb-1">Peildatum</label>
+                 <input 
+                   type="date" 
+                   value={satisfactionDate}
+                   onChange={(e) => setSatisfactionDate(e.target.value)}
+                   className="w-full border p-2 rounded text-sm"
+                 />
+               </div>
+               
+               <div>
+                 <label className="block text-sm font-medium text-gray-700 mb-1">Toelichting</label>
+                 <textarea 
+                   value={satisfactionNotes}
+                   onChange={(e) => setSatisfactionNotes(e.target.value)}
+                   className="w-full border p-2 rounded h-24 text-sm"
+                   placeholder="Licht de scores toe..."
+                 />
+               </div>
+
+               <div className="flex justify-end gap-2 pt-2 border-t">
+                 <button 
+                   onClick={() => setShowSatisfactionModal(false)}
+                   className="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded"
+                 >
+                   Annuleren
+                 </button>
+                 <button 
+                   onClick={handleSaveSatisfaction}
+                   className="px-4 py-2 bg-richting-orange text-white rounded font-bold hover:bg-orange-600"
+                 >
+                   Opslaan
+                 </button>
+               </div>
+
+               {/* History Section */}
+               {customer.satisfactionHistory && customer.satisfactionHistory.length > 0 && (
+                 <div className="border-t pt-4 mt-4">
+                   <h4 className="text-sm font-bold text-slate-700 mb-2">Historie</h4>
+                   <div className="max-h-40 overflow-y-auto space-y-2">
+                     {[...customer.satisfactionHistory]
+                       .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+                       .map((entry, idx) => (
+                       <div key={idx} className="bg-gray-50 p-2 rounded text-xs border border-gray-100">
+                         <div className="flex justify-between items-center mb-1">
+                           <span className="font-semibold text-slate-700">
+                             {new Date(entry.date).toLocaleDateString('nl-NL')}
+                           </span>
+                           <span className={`font-bold ${entry.average >= 7 ? 'text-green-600' : entry.average >= 6 ? 'text-yellow-600' : 'text-red-600'}`}>
+                             {entry.average.toFixed(1)}
+                           </span>
+                         </div>
+                         <div className="text-gray-500 flex gap-2 mb-1">
+                           <span>V: {entry.trust}</span>
+                           <span>A: {entry.attention}</span>
+                           <span>G: {entry.equality}</span>
+                         </div>
+                         {entry.notes && (
+                           <p className="text-gray-600 italic">"{entry.notes}"</p>
+                         )}
+                       </div>
+                     ))}
+                   </div>
+                 </div>
+               )}
+             </div>
+           </div>
+         </div>
+       )}
 
        <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
          {/* LOCATIONS SECTION */}
@@ -3269,7 +3709,22 @@ const CustomersView = ({ user, onOpenDoc }: { user: User, onOpenDoc: (d: Documen
 
   // Callback for when a customer is updated in the detail view
   const handleCustomerUpdate = (updated: Customer) => {
-      setCustomers(prev => prev.map(c => c.id === updated.id ? updated : c));
+      setCustomers(prev => prev.map(c => {
+        // Update the exact match
+        if (c.id === updated.id) return updated;
+        
+        // Also update duplicates by name to keep UI consistent (e.g. status changes)
+        // This handles cases where duplicate customers exist in the database
+        if (c.name?.trim().toLowerCase() === updated.name?.trim().toLowerCase()) {
+           // We only sync status and some key fields to avoid data loss on specific fields
+           return { 
+             ...c, 
+             status: updated.status,
+             // Optional: sync other fields if needed
+           };
+        }
+        return c;
+      }));
       setSelectedCustomer(updated); // Update the detail view as well
   };
 
@@ -4638,9 +5093,13 @@ const RegioView = ({ user }: { user: User }) => {
                       <span className={`px-2 py-0.5 rounded text-xs font-bold uppercase flex-shrink-0 ${
                         customer.status === 'active' ? 'bg-green-100 text-green-700' : 
                         customer.status === 'prospect' ? 'bg-blue-100 text-blue-700' : 
+                        customer.status === 'churned' ? 'bg-red-100 text-red-700' :
                         'bg-gray-100 text-gray-600'
                       }`}>
-                        {customer.status === 'active' ? 'Actief' : customer.status === 'prospect' ? 'Prospect' : customer.status}
+                        {customer.status === 'active' ? 'Actief' : 
+                         customer.status === 'prospect' ? 'Prospect' : 
+                         customer.status === 'churned' ? 'Beëindigd' : 
+                         customer.status}
                       </span>
                     </div>
                     {employeeCount > 0 && (
@@ -6208,6 +6667,40 @@ const SettingsView = ({ user }: { user: User }) => {
                 <div className="flex justify-between items-center">
                   <h3 className="text-lg font-bold text-slate-900">Klanten Beheer</h3>
                   <div className="flex gap-2">
+                    {/* Cleanup Button - Temporary Fix */}
+                    <button
+                      onClick={async () => {
+                        if (!window.confirm('Dit verwijdert alle klanten zonder naam (spook-klanten) en klanten met ongeldige data. Doorgaan?')) return;
+                        
+                        try {
+                          // Fetch all customers
+                          const allCustomers = await customerService.getAllCustomers();
+                          // Filter ghosts (no name or empty name)
+                          const ghosts = allCustomers.filter(c => !c.name || c.name.trim() === '');
+                          
+                          if (ghosts.length === 0) {
+                            alert('Geen spook-klanten gevonden.');
+                            return;
+                          }
+                          
+                          // Delete ghosts
+                          let deletedCount = 0;
+                          for (const ghost of ghosts) {
+                            await customerService.deleteCustomer(ghost.id);
+                            deletedCount++;
+                          }
+                          
+                          alert(`✅ ${deletedCount} spook-klanten verwijderd. Herlaad de pagina.`);
+                          window.location.reload();
+                        } catch (error: any) {
+                          console.error('Error cleaning ghosts:', error);
+                          alert(`Fout bij opruimen: ${error.message}`);
+                        }
+                      }}
+                      className="bg-red-100 text-red-700 px-4 py-2 rounded-lg font-bold hover:bg-red-200 transition-colors text-sm border border-red-200"
+                    >
+                      🧹 Ruim spook-klanten op
+                    </button>
                     <button
                       onClick={handleExportCustomers}
                       className="bg-blue-600 text-white px-4 py-2 rounded-lg font-bold hover:bg-blue-700 transition-colors text-sm"
