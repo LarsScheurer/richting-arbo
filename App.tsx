@@ -4183,86 +4183,54 @@ const RegioView = ({ user }: { user: User }) => {
     return grouped;
   }, [allLocations, richtingLocaties, customers]);
 
-  // Bereken medewerkers per regio (tel elke klant maar EEN KEER per regio)
+  // NIEUWE LOGICA: Bereken medewerkers per vestiging (tel per locatie, niet per klant)
+  // Elke locatie is gekoppeld aan 1 Richting vestiging
+  const medewerkersPerVestiging = useMemo(() => {
+    const totals: Record<string, number> = {};
+    
+    // Loop door alle locaties en tel medewerkers per vestiging
+    allLocations.forEach(loc => {
+      if (loc.richtingLocatieId && loc.employeeCount !== undefined && loc.employeeCount !== null) {
+        const richtingLoc = richtingLocaties.find(rl => rl.id === loc.richtingLocatieId);
+        if (richtingLoc) {
+          const vestigingNaam = richtingLoc.vestiging;
+          if (!totals[vestigingNaam]) {
+            totals[vestigingNaam] = 0;
+          }
+          totals[vestigingNaam] += loc.employeeCount;
+        }
+      }
+    });
+    
+    return totals;
+  }, [allLocations, richtingLocaties]);
+
+  // NIEUWE LOGICA: Bereken medewerkers per regio (som van alle vestigingen in die regio)
+  // Elke vestiging is gekoppeld aan een regio
   const medewerkersPerRegio = useMemo(() => {
     const totals: Record<string, number> = {};
-    Object.keys(klantenPerRegio).forEach(regio => {
-      const processedCustomers = new Set<string>();
-      let total = 0;
-      
-      klantenPerRegio[regio].forEach(item => {
-        // Tel elke klant maar EEN KEER per regio
-        if (processedCustomers.has(item.customer.id)) return;
-        processedCustomers.add(item.customer.id);
-        
-        // Zoek alle locaties van deze klant in deze regio
-        const customerLocationsInRegio = klantenPerRegio[regio].filter(
-          i => i.customer.id === item.customer.id
-        );
-        const locationsWithCount = customerLocationsInRegio.filter(
-          i => i.location.employeeCount !== undefined && i.location.employeeCount !== null
-        );
-        
-        if (locationsWithCount.length > 0) {
-          // Klant heeft locaties met aantallen in deze regio: gebruik customer.employeeCount (prioriteit)
-          // OF gebruik MAX van locatie-aantallen als customer.employeeCount niet beschikbaar is
-          if (item.customer.employeeCount) {
-            total += item.customer.employeeCount;
-          } else {
-            const maxLocationCount = Math.max(...locationsWithCount.map(i => i.location.employeeCount || 0));
-            total += maxLocationCount;
-          }
-        } else {
-          // Klant heeft geen locaties met aantallen in deze regio: gebruik customer.employeeCount
-          total += item.customer.employeeCount || 0;
-        }
-      });
-      
-      totals[regio] = total;
-    });
-    return totals;
-  }, [klantenPerRegio]);
-
-  // Bereken medewerkers per vestiging (tel elke klant maar EEN KEER per vestiging)
-  const medewerkersPerVestiging = useMemo(() => {
-    if (!selectedRegio) return {};
-    const totals: Record<string, number> = {};
-    const processedCustomersPerVestiging: Record<string, Set<string>> = {};
+    const processedVestigingen = new Set<string>();
     
-    klantenPerRegio[selectedRegio]?.forEach(item => {
-      if (!totals[item.vestiging]) {
-        totals[item.vestiging] = 0;
-        processedCustomersPerVestiging[item.vestiging] = new Set();
+    // Loop door alle Richting vestigingen en tel medewerkers per regio
+    richtingLocaties.forEach(richtingLoc => {
+      const regio = richtingLoc.regio;
+      if (!regio) return;
+      
+      // Voorkom dubbele telling van dezelfde vestiging
+      if (processedVestigingen.has(richtingLoc.vestiging)) return;
+      processedVestigingen.add(richtingLoc.vestiging);
+      
+      if (!totals[regio]) {
+        totals[regio] = 0;
       }
       
-      // Tel elke klant maar EEN KEER per vestiging
-      if (processedCustomersPerVestiging[item.vestiging].has(item.customer.id)) return;
-      processedCustomersPerVestiging[item.vestiging].add(item.customer.id);
-      
-      // Zoek alle locaties van deze klant bij deze vestiging
-      const customerLocationsAtVestiging = klantenPerRegio[selectedRegio]?.filter(
-        i => i.customer.id === item.customer.id && i.vestiging === item.vestiging
-      ) || [];
-      const locationsWithCount = customerLocationsAtVestiging.filter(
-        i => i.location.employeeCount !== undefined && i.location.employeeCount !== null
-      );
-      
-      if (locationsWithCount.length > 0) {
-        // Klant heeft locaties met aantallen bij deze vestiging: gebruik customer.employeeCount (prioriteit)
-        // OF gebruik MAX van locatie-aantallen als customer.employeeCount niet beschikbaar is
-        if (item.customer.employeeCount) {
-          totals[item.vestiging] += item.customer.employeeCount;
-        } else {
-          const maxLocationCount = Math.max(...locationsWithCount.map(i => i.location.employeeCount || 0));
-          totals[item.vestiging] += maxLocationCount;
-        }
-      } else {
-        // Klant heeft geen locaties met aantallen bij deze vestiging: gebruik customer.employeeCount
-        totals[item.vestiging] += item.customer.employeeCount || 0;
-      }
+      // Tel medewerkers van alle locaties gekoppeld aan deze vestiging
+      const vestigingMedewerkers = medewerkersPerVestiging[richtingLoc.vestiging] || 0;
+      totals[regio] += vestigingMedewerkers;
     });
+    
     return totals;
-  }, [selectedRegio, klantenPerRegio]);
+  }, [richtingLocaties, medewerkersPerVestiging]);
 
   // Filter klanten op basis van geselecteerde regio/vestiging
   // Unieke klanten (om duplicaten te voorkomen)
@@ -4272,14 +4240,24 @@ const RegioView = ({ user }: { user: User }) => {
     if (selectedVestiging) {
       filtered = filtered.filter(item => item.vestiging === selectedVestiging);
     }
-    // Unieke klanten op basis van customer ID
-    const uniqueCustomers = new Map<string, { customer: Customer, location: Location }>();
+    // Aggregeer locaties per klant en bereken totaal aantal medewerkers voor deze regio
+    const customerMap = new Map<string, { customer: Customer, locations: Location[], totalRegionEmployees: number }>();
     filtered.forEach(item => {
-      if (!uniqueCustomers.has(item.customer.id)) {
-        uniqueCustomers.set(item.customer.id, { customer: item.customer, location: item.location });
+      const existing = customerMap.get(item.customer.id);
+      const empCount = item.location.employeeCount || 0;
+      
+      if (existing) {
+        existing.locations.push(item.location);
+        existing.totalRegionEmployees += empCount;
+      } else {
+        customerMap.set(item.customer.id, { 
+          customer: item.customer, 
+          locations: [item.location],
+          totalRegionEmployees: empCount 
+        });
       }
     });
-    return Array.from(uniqueCustomers.values());
+    return Array.from(customerMap.values());
   }, [selectedRegio, selectedVestiging, klantenPerRegio]);
 
   // Pie chart data: Actieve klanten vs Prospects
@@ -4485,42 +4463,14 @@ const RegioView = ({ user }: { user: User }) => {
               <p className="text-xs text-gray-600 mb-1">Totaal Medewerkers</p>
               <p className="text-3xl font-bold text-slate-900">
                 {(() => {
-                  // Bereken totaal: tel elke klant maar EEN KEER
-                  // Als een klant locaties heeft met employeeCount, gebruik de MAX (omdat locatie-aantallen mogelijk het totaal zijn)
-                  // Als een klant geen locaties heeft met employeeCount, gebruik customer.employeeCount
-                  const processedCustomers = new Set<string>();
-                  let total = 0;
-                  
-                  customers.forEach(customer => {
-                    if (processedCustomers.has(customer.id)) return;
-                    processedCustomers.add(customer.id);
-                    
-                    // Zoek alle locaties voor deze klant
-                    const customerLocations = allLocations.filter(loc => loc.customerId === customer.id);
-                    const locationsWithCount = customerLocations.filter(
-                      loc => loc.employeeCount !== undefined && loc.employeeCount !== null
-                    );
-                    
-                    if (locationsWithCount.length > 0) {
-                      // Klant heeft locaties met aantallen: gebruik MAX (omdat locatie-aantallen mogelijk het totaal zijn, niet per locatie)
-                      // OF gebruik customer.employeeCount als die beschikbaar is (prioriteit)
-                      if (customer.employeeCount) {
-                        total += customer.employeeCount;
-                      } else {
-                        // Als customer.employeeCount niet beschikbaar is, gebruik MAX van locatie-aantallen
-                        const maxLocationCount = Math.max(...locationsWithCount.map(loc => loc.employeeCount || 0));
-                        total += maxLocationCount;
-                      }
-                    } else {
-                      // Klant heeft geen locaties met aantallen: gebruik customer.employeeCount
-                      total += customer.employeeCount || 0;
-                    }
-                  });
-                  
-                  return total.toLocaleString('nl-NL');
+                  // NIEUWE LOGICA: Totaal = som van alle regio's
+                  // Elke regio = som van alle vestigingen in die regio
+                  // Elke vestiging = som van alle locaties gekoppeld aan die vestiging
+                  const totaal = Object.values(medewerkersPerRegio).reduce((sum, count) => sum + count, 0);
+                  return totaal.toLocaleString('nl-NL');
                 })()}
               </p>
-              <p className="text-xs text-gray-500 mt-1">Gebaseerd op locatie-specifieke aantallen</p>
+              <p className="text-xs text-gray-500 mt-1">Gebaseerd op locatie-specifieke aantallen per Richting vestiging</p>
             </div>
           </div>
         </div>
@@ -4628,10 +4578,22 @@ const RegioView = ({ user }: { user: User }) => {
             <p className="text-gray-500 text-center py-8">Geen klanten gevonden voor deze selectie.</p>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {filteredKlanten.map(({ customer, location }) => {
+              {filteredKlanten.map(({ customer, locations, totalRegionEmployees }) => {
                 // Try multiple logo sources
                 const logoSrc = customer.logoUrl || getCompanyLogoUrl(customer.website) || (customer.website ? `https://wsrv.nl/?url=${ensureUrl(customer.website)}&w=128&output=png` : null);
-                const employeeCount = location?.employeeCount || customer.employeeCount;
+                
+                // Use calculated total for region (do NOT use customer.employeeCount global total)
+                const employeeCount = totalRegionEmployees;
+                
+                // Determine location label
+                let locationLabel = '';
+                if (locations.length === 1) {
+                  locationLabel = locations[0].name || locations[0].city || '';
+                } else if (locations.length > 1) {
+                  const first = locations[0].name || locations[0].city;
+                  locationLabel = first ? `${first} + ${locations.length - 1} andere` : `${locations.length} locaties`;
+                }
+
                 return (
                   <div
                     key={customer.id}
@@ -4669,8 +4631,8 @@ const RegioView = ({ user }: { user: User }) => {
                       <div className="flex-1 min-w-0">
                         <p className="font-bold text-slate-900 text-sm mb-1">{customer.name}</p>
                         <p className="text-xs text-gray-500 mb-1">{customer.industry}</p>
-                        {location && (
-                          <p className="text-xs text-gray-400 italic">{location.name}</p>
+                        {locationLabel && (
+                          <p className="text-xs text-gray-400 italic">{locationLabel}</p>
                         )}
                       </div>
                       <span className={`px-2 py-0.5 rounded text-xs font-bold uppercase flex-shrink-0 ${
@@ -4681,10 +4643,10 @@ const RegioView = ({ user }: { user: User }) => {
                         {customer.status === 'active' ? 'Actief' : customer.status === 'prospect' ? 'Prospect' : customer.status}
                       </span>
                     </div>
-                    {employeeCount && (
+                    {employeeCount > 0 && (
                       <div className="flex items-center gap-2 text-xs text-gray-600 mt-2 pt-2 border-t border-gray-200">
                         <span className="font-bold text-richting-orange">{employeeCount.toLocaleString('nl-NL')}</span>
-                        <span>medewerkers{location?.employeeCount ? ` (${location.name})` : ''}</span>
+                        <span>medewerkers {locations.length === 1 ? `(${locations[0].name || locations[0].city || 'Locatie'})` : `(totaal ${locations.length} locaties)`}</span>
                       </div>
                     )}
                   </div>
