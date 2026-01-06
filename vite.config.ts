@@ -6,8 +6,8 @@ export default defineConfig(({ mode }) => {
     const env = loadEnv(mode, '.', '');
     return {
       server: {
-        port: 5173,
-        // host: '0.0.0.0', // Verwijderd om permissie problemen te voorkomen
+        port: 5174,
+        host: '127.0.0.1',
 
         proxy: {
           '/api/functions': {
