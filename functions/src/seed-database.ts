@@ -7,7 +7,7 @@ const pdf = require('pdf-parse');
 // ▼ ▼ ▼ GEGEVENS ▼ ▼ ▼
 const PROJECT_ID = 'richting-sales-d764a'; 
 const FOLDER_ID = '1R7lGWA5ueLt6gT68a84RFt-u6Ll7QEbd'; 
-const LOCATION = 'europe-west1'; 
+const LOCATION = 'europe-west4'; 
 
 // 1. Initialisatie
 const KEY_FILE_PATH = path.join(__dirname, '../service-account-key.json');

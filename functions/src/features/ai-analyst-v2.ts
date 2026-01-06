@@ -1,18 +1,25 @@
 import { onCall, HttpsError } from "firebase-functions/v2/https";
 import { VertexAI, HarmCategory, HarmBlockThreshold } from "@google-cloud/vertexai";
 import { initializeApp, getApps } from "firebase-admin/app";
-import { getFirestore, FieldValue } from "firebase-admin/firestore";
+import { getFirestore, FieldValue, VectorQuerySnapshot } from "firebase-admin/firestore";
 
-// Initialize Firebase Admin if not already done
+// Initialiseer Admin SDK
 if (getApps().length === 0) {
   initializeApp();
 }
 
-const db = getFirestore("richting01");
-
-const PROJECT_ID = process.env.GCLOUD_PROJECT;
+const db = getFirestore(); // Gebruik standaard database
+const PROJECT_ID = process.env.GCLOUD_PROJECT || "richting-sales-d764a";
 const LOCATION = "europe-west4"; 
-const MODEL_NAME = "gemini-1.5-pro-001"; // Fallback to stable pro model
+const MODEL_NAME = "gemini-1.5-pro-001";
+const EMBEDDING_MODEL = "text-embedding-004"; // Zelfde model als in seed-database.ts!
+
+// Hulpfunctie: Maak embedding van de vraag van de gebruiker
+async function getEmbedding(text: string, vertexAI: VertexAI) {
+  const model = vertexAI.getGenerativeModel({ model: EMBEDDING_MODEL });
+  const result = await model.embedContent(text);
+  return result.embedding.values;
+}
 
 export const analyseBedrijfV2 = onCall(
   { region: LOCATION, timeoutSeconds: 540, memory: "1GiB", cors: true },
@@ -20,37 +27,64 @@ export const analyseBedrijfV2 = onCall(
     const { companyName, websiteUrl } = request.data;
     
     if (!companyName || !websiteUrl) throw new HttpsError("invalid-argument", "Geen input: companyName en websiteUrl vereist");
-    if (!PROJECT_ID) throw new HttpsError("failed-precondition", "Project ID mist");
 
     const vertexAI = new VertexAI({ project: PROJECT_ID, location: LOCATION });
-    
-    const systemInstruction = `
+
+    try {
+      // STAP 1: Zoek relevante kennis in jouw eigen Firestore database
+      // We maken eerst een vector van de zoekopdracht
+      const zoekVraag = `Informatie over werkwijze, verzuim en diensten voor klant ${companyName} in de sector`;
+      const queryEmbedding = await getEmbedding(zoekVraag, vertexAI);
+
+      // We zoeken in Firestore naar de 5 meest relevante stukjes tekst
+      // LET OP: Hiervoor moet wel een Vector Index bestaan (zie instructie onder code)
+      const coll = db.collection('knowledge_base');
+      const vectorQuery = coll.findNearest('embedding', queryEmbedding, {
+        limit: 5,
+        distanceMeasure: 'COSINE'
+      });
+
+      const vectorSnapshot = await vectorQuery.get();
+
+      let eigenKennisContext = "";
+      vectorSnapshot.forEach(doc => {
+        const data = doc.data();
+        eigenKennisContext += `\n--- BRON: ${data.metadata.filename} ---\n${data.content}\n`;
+      });
+
+      if (!eigenKennisContext) {
+        eigenKennisContext = "Geen specifieke interne documenten gevonden.";
+      }
+
+      console.log(`🧠 Kennis opgehaald: ${vectorSnapshot.size} documenten.`);
+
+      // STAP 2: De System Instruction (Nu MET jouw eigen kennis)
+      const systemInstruction = `
 Je bent een Senior Data Analist gespecialiseerd in Arbodienstverlening en Verzuimmanagement.
-Je taak is het genereren van een "Diepgaande Brancheanalyse" (Level 1) op basis van een bedrijfsnaam en website.
+Je taak is het genereren van een "Diepgaande Brancheanalyse" (Level 1).
+
+GEBRUIK DEZE INTERNE KENNIS (PRIORITEIT):
+De volgende informatie komt uit de interne dossiers van Richting. Gebruik dit om je antwoord specifiek en correct te maken:
+${eigenKennisContext}
 
 INPUT:
 - Bedrijfsnaam: ${companyName}
 - Website: ${websiteUrl}
 
 INSTRUCTIES VOOR ONDERZOEK (Google Search Grounding):
-1. Analyseer de website en zoek extern naar de branche, activiteiten en cultuur.
-2. Zoek naar de relevante CAO (status onderhandelingen, partijen, thema's).
-3. Zoek naar actuele branche-risico's en verzuimtrends.
+Vul de interne kennis aan met actuele externe data (CAO status, nieuws).
 
 BEOORDELINGSMETHODIEK: FINE & KINNEY
 Gebruik voor de risico-analyse (hoofdstuk 4) de Fine & Kinney formule:
 Risico = Waarschijnlijkheid (W) x Blootstelling (B) x Ernst (E).
 
 Kies waarden uit deze vaste schalen:
-1. Waarschijnlijkheid (W):
-   - 10 (Vrijwel zeker), 6 (Zeer waarschijnlijk), 3 (Waarschijnlijk), 1 (Mogelijk), 0.5 (Denkbaar), 0.2 (Vrijwel onmogelijk)
-2. Blootstelling (B):
-   - 10 (Voortdurend), 6 (Dagelijks), 3 (Wekelijks), 2 (Maandelijks), 1 (Jaarlijks), 0.5 (Zelden)
-3. Ernst (E):
-   - 100 (Ramp/Meerdere doden), 40 (Zeer groot/Dode), 15 (Ernst/Blijvend), 7 (Belangrijk/Verzuim), 3 (Gering/EHBO), 1 (Verwaarloosbaar)
+1. Waarschijnlijkheid (W): 10, 6, 3, 1, 0.5, 0.2
+2. Blootstelling (B): 10, 6, 3, 2, 1, 0.5
+3. Ernst (E): 100, 40, 15, 7, 3, 1
 
 RICHTING SERVICES (Harde URL eis):
-Gebruik bij het adviseren van diensten ('advies_en_actie') UITSLUITEND deze exacte links:
+Gebruik bij 'advies_en_actie' UITSLUITEND deze exacte links:
 - RI&E: "https://www.richting.nl/dienst/risico-inventarisatie-en-evaluatie/"
 - PAGO/PMO: "https://www.richting.nl/dienst/pmo-pago/"
 - Het Richtinggevende Gesprek: "https://www.richting.nl/dienst/het-richtinggevende-gesprek/"
@@ -58,7 +92,7 @@ Gebruik bij het adviseren van diensten ('advies_en_actie') UITSLUITEND deze exac
 - Werkplekonderzoek: "https://www.richting.nl/dienst/werkplekonderzoek/"
 
 OUTPUT FORMAAT:
-Genereer ALLEEN valide JSON. Geen markdown, geen introductie.
+Genereer ALLEEN valide JSON. Geen markdown.
 Gebruik exact deze structuur:
 
 {
@@ -126,8 +160,7 @@ Gebruik exact deze structuur:
   }
 }`;
 
-    try {
-      // In Vertex Node SDK, systemInstruction is passed at model instantiation.
+      // STAP 3: De daadwerkelijke AI aanroep
       const modelWithSystem = vertexAI.getGenerativeModel({
         model: MODEL_NAME,
         systemInstruction: {
@@ -136,17 +169,9 @@ Gebruik exact deze structuur:
         },
         generationConfig: { 
             responseMimeType: "application/json",
-            temperature: 0.5,
-            topP: 0.95,
-            maxOutputTokens: 8192
+            temperature: 0.5
         },
-        tools: [{ googleSearchRetrieval: {} }],
-        safetySettings: [
-            { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_NONE },
-            { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_NONE },
-            { category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold: HarmBlockThreshold.BLOCK_NONE },
-            { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_NONE }
-        ]
+        tools: [{ googleSearchRetrieval: {} }] // Hij mag OOK nog op internet zoeken
       });
 
       const prompt = `Maak een analyse voor ${companyName}, ${websiteUrl}`;
@@ -157,26 +182,22 @@ Gebruik exact deze structuur:
 
       const parsedResult = JSON.parse(text.replace(/```json/g, "").replace(/```/g, "").trim());
       
-      // Opslaan voor logging
-      try {
-        await db.collection("companyAnalyses").add({
-            companyName,
-            websiteUrl,
-            analysis: parsedResult,
-            userId: request.auth?.uid || "anonymous",
-            createdAt: FieldValue.serverTimestamp(),
-            model: MODEL_NAME,
-            version: "v2-custom-prompt"
-        });
-      } catch (e) {
-        console.error("Log error", e);
-      }
+      // Loggen in Firestore
+      await db.collection("companyAnalyses").add({
+          companyName,
+          websiteUrl,
+          analysis: parsedResult,
+          userId: request.auth?.uid || "anonymous",
+          createdAt: FieldValue.serverTimestamp(),
+          model: MODEL_NAME,
+          bronnen_gebruikt: vectorSnapshot.size > 0
+      });
 
       return parsedResult;
+
     } catch (error: any) {
       console.error("AI Error:", error);
       throw new HttpsError("internal", "Fout: " + error.message);
     }
   }
 );
-
