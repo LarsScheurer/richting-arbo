@@ -8,7 +8,7 @@ import { db, storage } from '../../services/firebase';
 import { EyeIcon, HeartIcon, ExternalLinkIcon, ArchiveIcon, SendIcon, MapIcon, GoogleIcon, TrashIcon, UserIcon, EmailIcon, GoogleDocIcon, PdfIcon } from '../../components/icons';
 import { analyzeContent, askQuestion, analyzeOrganisatieBranche, analyzeCultuur } from '../../services/geminiService';
 import ReactMarkdown from 'react-markdown';
-import { generateOrganisatieProfielPDF } from '../../utils/pdfGenerator';
+import { generateOrganisatieProfielPDF } from '../../utils/pdfGenerator.ts';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { ORGANISATIE_ANALYSE_HOOFDSTUKKEN, ORGANISATIE_ANALYSE_HOOFDSTUKKEN_ARRAY } from '../../utils/organisatieAnalyseConstants';
 import { getCategoryLabel, getStatusLabel, ensureUrl, getCompanyLogoUrl, getFriendlyErrorMessage, handleBackup } from '../../utils/helpers';

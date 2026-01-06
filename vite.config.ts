@@ -6,7 +6,7 @@ export default defineConfig(({ mode }) => {
     const env = loadEnv(mode, '.', '');
     return {
       server: {
-        port: 5174,
+        port: 3333,
         host: '127.0.0.1',
 
         proxy: {
