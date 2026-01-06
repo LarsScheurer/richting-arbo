@@ -398,3 +398,5 @@ firebase deploy --only functions:analyseBrancheStapsgewijs
 **Versie**: 1.0
 
 
+
+

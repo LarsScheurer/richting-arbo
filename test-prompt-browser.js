@@ -182,3 +182,5 @@ window.testPromptFinder = async function() {
 console.log('✅ Test script geladen! Voer uit: testPromptFinder()');
 
 
+
+

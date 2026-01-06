@@ -84,3 +84,5 @@ console.log('');
 console.log('💡 Tip: Je kunt deze code ook direct in de console plakken!');
 
 
+
+

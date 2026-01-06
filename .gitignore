@@ -42,3 +42,5 @@ ui-debug.log
 .env
 .env.local
 .env.*.local
+
+service-account-key.json

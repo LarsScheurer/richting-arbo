@@ -8,6 +8,13 @@ export default defineConfig(({ mode }) => {
       server: {
         port: 3000,
         host: '0.0.0.0',
+        proxy: {
+          '/api/functions': {
+            target: 'https://europe-west4-richting-sales-d764a.cloudfunctions.net',
+            changeOrigin: true,
+            rewrite: (path) => path.replace(/^\/api\/functions/, '')
+          }
+        }
       },
       plugins: [react()],
       define: {
