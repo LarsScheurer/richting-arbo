@@ -6,8 +6,9 @@ export default defineConfig(({ mode }) => {
     const env = loadEnv(mode, '.', '');
     return {
       server: {
-        port: 3000,
-        host: '0.0.0.0',
+        port: 5173,
+        // host: '0.0.0.0', // Verwijderd om permissie problemen te voorkomen
+
         proxy: {
           '/api/functions': {
             target: 'https://europe-west4-richting-sales-d764a.cloudfunctions.net',
