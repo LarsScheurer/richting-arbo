@@ -75,4 +75,3 @@ export const DocumentModal: React.FC<DocumentModalProps> = ({ doc, user, onClose
     </div>
   );
 };
-
