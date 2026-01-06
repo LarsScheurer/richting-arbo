@@ -1,0 +1,15 @@
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import { User, DocumentSource, KNOWLEDGE_STRUCTURE, DocType, GeminiAnalysisResult, ChatMessage, Customer, Location, UserRole, ContactPerson, OrganisatieProfiel, Risico, Proces, Functie } from '../../types';
+import { authService, dbService, customerService, promptService, richtingLocatiesService, Prompt, RichtingLocatie, processService, functionService, substanceService, logoService } from '../../services/firebase';
+import { addRiskAssessment, getRisksByCustomer, getRisksByProcess, getRisksByFunction, getRisksBySubstance } from '../../services/riskService';
+import { Process, Function as FunctionType, Substance, RiskAssessment } from '../../types/firestore';
+import { doc, updateDoc } from 'firebase/firestore';
+import { db, storage } from '../../services/firebase';
+import { EyeIcon, HeartIcon, ExternalLinkIcon, ArchiveIcon, SendIcon, MapIcon, GoogleIcon, TrashIcon, UserIcon, EmailIcon, GoogleDocIcon, PdfIcon } from '../../components/icons';
+import { analyzeContent, askQuestion, analyzeOrganisatieBranche, analyzeCultuur } from '../../services/geminiService';
+import ReactMarkdown from 'react-markdown';
+import { generateOrganisatieProfielPDF } from '../../utils/pdfGenerator';
+import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { ORGANISATIE_ANALYSE_HOOFDSTUKKEN, ORGANISATIE_ANALYSE_HOOFDSTUKKEN_ARRAY } from '../../utils/organisatieAnalyseConstants';
+import { getCategoryLabel, getStatusLabel, ensureUrl, getCompanyLogoUrl, getFriendlyErrorMessage, handleBackup } from '../../utils/helpers';
+import { FUNCTIONS_BASE_URL } from '../../config';
