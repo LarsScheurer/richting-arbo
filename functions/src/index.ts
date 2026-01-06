@@ -10,10 +10,12 @@ if (!admin.apps.length) {
 // Importeer features
 import { fetchLocationsForCustomer as fetchLocations } from './locations';
 import { generateLevel as generateLevelFunc } from './features/ai-analyst-v2';
+import { importDocumentsFromDrive as importDrive } from './drive-import';
 
 // Exporteer functions
 export const fetchLocationsForCustomer = fetchLocations;
 export const generateLevel = generateLevelFunc;
+export const importDocumentsFromDrive = importDrive;
 
 // Simpele test functie
 export const ping = functions.region('europe-west4').https.onRequest((req, res) => {
