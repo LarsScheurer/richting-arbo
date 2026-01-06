@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { User, DocumentSource, ChatMessage } from '../../types';
 import { SendIcon } from '../../components/icons';
-import { askQuestion } from '../../services/firebase';
+import { askQuestion } from '../../services/geminiService';
 
 interface ChatViewProps {
   user: User;

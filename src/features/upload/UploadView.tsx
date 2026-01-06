@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { User, DocType, Customer, DocumentSource, GeminiAnalysisResult } from '../../types';
-import { customerService, dbService, analyzeContent } from '../../services/firebase';
+import { customerService, dbService } from '../../services/firebase';
+import { analyzeContent } from '../../services/geminiService';
 import { EmailIcon, GoogleDocIcon, PdfIcon } from '../../components/icons';
 import { getCategoryLabel } from '../../utils/helpers';
 
