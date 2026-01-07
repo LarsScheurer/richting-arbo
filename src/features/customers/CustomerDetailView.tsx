@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import { User, Customer, Location, DocumentSource, UserRole } from '../../types';
 import { customerService, dbService, processService, functionService, substanceService } from '../../services/firebase';
 import { FUNCTIONS_BASE_URL } from '../../config';
-import { getCompanyLogoUrl, ensureUrl } from '../../utils/helpers';
+import { getCompanyLogoUrl, ensureUrl, getCategoryLabel } from '../../utils/helpers';
 import { GoogleIcon, TrashIcon, MapIcon, ExternalLinkIcon, ArchiveIcon } from '../../components/icons';
 import { generateOrganisatieProfielPDF } from '../../utils/pdfGenerator';
 
